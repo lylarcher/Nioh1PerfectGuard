@@ -32,7 +32,7 @@ SHIPPED_DOCS = {
     "CHANGELOG.md": os.path.join(root, "CHANGELOG.md"),
     "README_CN.md": os.path.join(root, "mod", "README_CN.md"),
     "README_EN.md": os.path.join(root, "mod", "README_EN.md"),
-    "QUICKSTART.md": os.path.join(root, "docs", "QUICKSTART.md"),
+    "QUICKSTART.md": os.path.join(root, "QUICKSTART.md"),
 }
 DOCS_DIR = os.path.join(root, "mod")
 
