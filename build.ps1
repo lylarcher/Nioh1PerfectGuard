@@ -193,6 +193,50 @@ function New-Dist {
 }
 
 # ──────────────────────────────────────────────────── 4. 安装到游戏 ──
+
+# The package ships an INI with every key and bilingual comments, and the user is
+# *expected* to tune it (that is what it is for). Copying the folder over the top
+# therefore silently destroys their settings -- and it is exactly the upgrade path
+# people take, so it would happen every single time a new key is added.
+#
+# So: keep the user's values, take the new file's structure and comments (which is
+# where new keys appear), and leave a backup behind. Keys the user edited keep
+# their value; keys they never touched keep the shipped value; new keys show up.
+function Merge-Ini {
+    param([string]$OldPath, [string]$NewPath, [string]$BackupPath)
+
+    Copy-Item -LiteralPath $OldPath -Destination $BackupPath -Force
+
+    $old = @{}
+    foreach ($line in [System.IO.File]::ReadAllLines($OldPath)) {
+        if ($line -match '^\s*([A-Za-z][A-Za-z0-9]*)\s*=(.*)$') {
+            $old[$Matches[1]] = $Matches[2].Trim()
+        }
+    }
+
+    $kept, $added = 0, 0
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($line in [System.IO.File]::ReadAllLines($NewPath)) {
+        if ($line -match '^\s*([A-Za-z][A-Za-z0-9]*)\s*=(.*)$') {
+            $key = $Matches[1]
+            if ($old.ContainsKey($key)) {
+                if ($old[$key] -ne $Matches[2].Trim()) {
+                    Write-Note ("保留你的设置：{0}={1}（随包默认 {2}）" -f `
+                                $key, $old[$key], $Matches[2].Trim())
+                    $kept++
+                }
+                $out.Add(("{0}={1}" -f $key, $old[$key]))
+                continue
+            }
+            $added++
+        }
+        $out.Add($line)
+    }
+    [System.IO.File]::WriteAllLines($NewPath, $out, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Ok ("配置合并完成：保留 {0} 项你的设置，新增 {1} 个随包键" -f $kept, $added)
+    Write-Note ("你的原配置已备份为 {0}" -f (Split-Path $BackupPath -Leaf))
+}
+
 function Install-ToGame {
     Write-Head "安装到 $GameDir"
     if (Get-Process -Name nioh -ErrorAction SilentlyContinue) {
@@ -206,25 +250,62 @@ function Install-ToGame {
     }
     $target = Join-Path $GameDir 'mods\Nioh1PerfectGuard'
     New-Item -ItemType Directory -Force -Path $target | Out-Null
+
+    $iniName = 'Nioh1PerfectGuard.ini'
+    $installedIni = Join-Path $target $iniName
+    $hadIni = Test-Path -LiteralPath $installedIni
+    $stash = $null
+    if ($hadIni) {
+        # move it aside first so the copy below cannot read a half-written file
+        $stash = Join-Path $env:TEMP ("pg_ini_{0}.ini" -f ([guid]::NewGuid().ToString('N')))
+        Copy-Item -LiteralPath $installedIni -Destination $stash -Force
+    }
+
     Copy-Item -Path (Join-Path $DistDir '*') -Destination $target -Recurse -Force
     Write-Ok "已复制到 $target"
+
+    if ($hadIni) {
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        Merge-Ini -OldPath $stash -NewPath $installedIni `
+                  -BackupPath (Join-Path $target ("Nioh1PerfectGuard.ini.backup-{0}" -f $stamp))
+        Remove-Item -LiteralPath $stash -Force -ErrorAction SilentlyContinue
+    }
 
     $bad = 0
     Get-ChildItem -LiteralPath $DistDir -Recurse -File | ForEach-Object {
         $rel = $_.FullName.Substring($DistDir.Length + 1)
         $dst = Join-Path $target $rel
+        # The INI is deliberately merged, so it will not match the shipped file
+        # byte-for-byte once the user has any setting of their own.
+        if ($rel -eq $iniName) { return }
         if (-not (Test-Path -LiteralPath $dst)) { Write-Bad "缺失 $rel"; $script:Failures++; $bad++ }
         elseif ((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -ne
                 (Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash) {
             Write-Bad "哈希不一致 $rel"; $script:Failures++; $bad++
         }
     }
-    if ($bad -eq 0) { Write-Ok '安装副本与交付包逐文件一致' }
+    if ($bad -eq 0) { Write-Ok '安装副本与交付包逐文件一致（INI 除外，按上面的合并结果）' }
 }
 
 # ───────────────────────────────────────────────────────────── main ──
 Write-Host '仁王1 精防 MOD — 编译 / 校验 / 打包' -ForegroundColor White
 Write-Note "项目根目录：$Root"
+
+# This file must stay UTF-8 *with* BOM: Windows PowerShell 5.1 decodes a BOM-less
+# .ps1 as ANSI, and the Chinese text then turns into mojibake that breaks quote
+# pairing (it has happened, and the failure looks like a syntax error in a line
+# that is perfectly fine). Any editor or tool that rewrites the file can drop the
+# BOM silently, so check it on every run instead of trusting it.
+$selfPath = $MyInvocation.MyCommand.Path
+if ($selfPath -and (Test-Path -LiteralPath $selfPath)) {
+    $head = [System.IO.File]::ReadAllBytes($selfPath)
+    if ($head.Length -ge 3 -and $head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF) {
+        Write-Ok 'build.ps1 编码：UTF-8 带 BOM'
+    } else {
+        Write-Bad 'build.ps1 缺少 UTF-8 BOM：PowerShell 5.1 会按 ANSI 解码，中文会乱码并破坏引号配对'
+        $script:Failures++
+    }
+}
 
 $watch = [System.Diagnostics.Stopwatch]::StartNew()
 try {
