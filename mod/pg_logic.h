@@ -297,6 +297,71 @@ static inline long long pg_buff_left_ms(const PgBuff *b, unsigned long long now)
 }
 
 // ---------------------------------------------------------------------------
+// The cancel gate: a guard press is a *decision* the engine may still overturn.
+//
+// A martial skill (武技) is "guard + attack", and the game lets some attacks be
+// *derived* into one -- that is a chain, not a cancel, and the mod must not disturb
+// it. The tricky part is press order: a player often hits guard a few tens of
+// milliseconds *before* the attack button. Deciding at the instant of the guard
+// press would therefore cancel in exactly that case, which would break the skill
+// input (and the derivation with it).
+//
+// So the guard press arms the gate instead of firing it, and the gate is resolved a
+// short window later:
+//
+//   * an attack press arriving inside the window -> the engine keeps its input: the
+//     gate is dropped and nothing is written (combination / derivation preserved);
+//   * nothing arrives -> the gate fires and the action is cancelled.
+//
+// The price is that the cancel happens `window_ms` after the press rather than at
+// the press, which is why the window is small (100ms) and configurable; a window of
+// 0 fires immediately (the behaviour before this gate existed, safe only if your
+// skill inputs are always attack-button-first).
+#define PG_CANCEL_IDLE 0
+#define PG_CANCEL_WAIT 1
+#define PG_CANCEL_FIRE 2
+#define PG_CANCEL_DROP 3
+
+typedef struct {
+    int pending;
+    unsigned long long armed_ms;
+} PgCancelGate;
+
+static inline void pg_cancel_gate_init(PgCancelGate *g) {
+    g->pending = 0;
+    g->armed_ms = 0;
+}
+
+static inline void pg_cancel_gate_arm(PgCancelGate *g, unsigned long long now) {
+    g->pending = 1;
+    g->armed_ms = now;
+}
+
+static inline void pg_cancel_gate_reset(PgCancelGate *g) {
+    g->pending = 0;
+    g->armed_ms = 0;
+}
+
+// `attack_pressed` is 1 only on the sample where an attack button went down.
+static inline int pg_cancel_gate_step(PgCancelGate *g, int attack_pressed,
+                                     unsigned long long now, int window_ms) {
+    if (!g->pending) return PG_CANCEL_IDLE;
+    if (attack_pressed) {
+        g->pending = 0;
+        return PG_CANCEL_DROP;             // the engine gets the input, we stay out
+    }
+    if (window_ms <= 0) {
+        g->pending = 0;
+        return PG_CANCEL_FIRE;             // no buffering configured: fire now
+    }
+    if (now >= g->armed_ms && now - g->armed_ms >= (unsigned long long)window_ms) {
+        g->pending = 0;
+        return PG_CANCEL_FIRE;
+    }
+    return PG_CANCEL_WAIT;
+}
+
+// ---------------------------------------------------------------------------
 // Diagnostic-stream throttle.
 //
 // A "log whenever the value changed" stream is only safe if the value changes
