@@ -78,6 +78,46 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 看日志：每 30 次以内打一行 `HP restore 前 -> 后 (+增量) max=.. mode=..`；
 累计值在 `STATE` 行尾（`hp_restores= / hp_total= / hp_full=`，`hp_full` 是满血次数）。
 
+### 2.0c 精防后的三个限时增益（本轮新增）
+
+精防成功后给自己挂一个**有持续时间**的增益。这是本 MOD 第一次做"有状态"的收益 ——
+以前所有功能都是"事件那一刻写几个字段就结束"，而这三个要在引擎里**存在若干秒再收回**。
+
+| 效果 | 本包默认 | 引擎实现 | 状态 ID |
+| --- | --- | --- | --- |
+| 移动速度 | **0 = 关闭**（想启用设 `SpeedBuffPercent=4`） | `AddStateObjectMoveSpeed` | 0x1B |
+| 承受伤害 | **0 = 关闭**（想启用设 `DamageCutPercent=4`） | `AddStateObjectDamageRate` | 0x1E |
+| 霸体 | **0 = 关闭**（想启用设 `ArmorBuff=1`） | `AddStateObjectArmor` | 0x33 |
+
+> ⚠ **为什么默认关闭**（与你要求的 4% 不同，原因请看完再决定）：
+> 这两个增益是本 MOD **唯一会调用游戏代码**的功能，而**那次调用至今没有在任何地方跑过一次** ——
+> 我本机那份安装的游戏进程**无法结束**（`Access is denied`，被保护），所以吸引模式实验没能做成。
+> 构造函数经由**进程级全局管理器**分配内存，并往**游戏线程正在遍历的容器**里插入；
+> 那个分配器能否被第二个线程安全使用**尚未证实**，一旦不是，失败形态是**静默的堆损坏**而不是干脆崩溃。
+> 在这种"从未执行过一次 + 可能是静默损坏"的情况下让它默认生效，风险不该由你的存档承担。
+> 想启用就把对应百分比改成 4（一行 INI，热更新生效）；我也会在你关掉本机游戏后立刻补做验证，
+> 通过就把默认值改回 4。
+
+语义（按确认的方案）：每次精防把计时**刷新**为满时长；数值**不叠加**（不因为连打精防变成 8%）；
+三个效果互相独立、各有开关与数值；只作用于玩家自己。
+
+**实现方式值得单独说**：没有去猜"哪个字段是速度/减伤"，而是**用引擎自己的增益状态对象** ——
+`DamageRate` 的生效代码就是 `伤害 × 对象参数`，所以 -4% 就是把参数设成 0.96，
+连"投技无视霸体"这种细节都是引擎自己实现的。对象由引擎分配与析构（我们**不**塞静态内存，
+否则会被引擎的分配器释放）。
+
+**安全边界（重要）**：这是本 MOD 唯一会**调用游戏函数**的功能，因此：
+
+- **绝不在异常处理（VEH）里调用**：那里跑在游戏线程的任意逻辑中间，重入无法推理。
+  异常处理只做纯算术（启动计时器），真正的调用由 MOD 自己的线程按时间执行。
+- `DiagDisable` 新增**位 16**：置上就完全不碰引擎状态对象（用于排查/兜底）。
+- 每次调用前后都打日志（`BUFF dmgcut: installing engine state ...`），出问题可用
+  `%LOCALAPPDATA%\CrashDumps` 与 `tools\analyze_dump.py` 直接定位到是哪一次调用。
+
+看日志：`BUFF speed start +4% for 10000ms (proc #n)`、`BUFF dmgcut start -4% ...`、
+`BUFF dmgcut end (held 10000ms, ...)`；累计值在 `STATE` 行尾
+（`buff_started= / buff_ended= / buff_failed= / dmgcut_installed= / left spd= dmgcut= armor=`）。
+
 ### 2.1 你在包内就能自己核对的
 
 | 做法 | 看什么 |
@@ -102,7 +142,7 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 | 锚点期望字节与解密镜像逐字节一致 | `python tools\test_anchors.py ..` | **4/4 一致**；输入槽推导得 `0x1B78658`，与独立已知值相符 |
 | 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **166 条断言全过** |
 | INI 编码与取值边界 + **内置默认值必须等于随包 INI** | `python tools\test_ini_encodings.py ..\mod` | **6/6** |
-| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **35/35 标记；96 条日志 0 条未解释** |
+| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **43/43 标记；105 条日志 0 条未解释** |
 | 交付文档只引用真实存在的文件 | `python tools\test_doc_paths.py ..` | 通过 |
 | 导出表 | `python tools\list_exports.py ..\mod\Nioh1PerfectGuard.dll` | 12 个 `PG_*` |
 | **测试过的算术 == 发货的算术** | `python tools\test_logic_digest.py ..` | 两个构建的数值指纹一致 |
@@ -161,7 +201,7 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 
 ---
 
-## 四、还需要你实机确认的（5 项，其中 3 号已有你那局的日志佐证）
+## 四、还需要你实机确认的（6 项，其中 3 号已有你那局的日志佐证）
 
 剩下这些**静态分析已经做到头了**，必须真的打一场才知道。请按
 `ACCEPTANCE_TEST.md` 走一遍，然后把日志整个发回：
@@ -173,6 +213,7 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 | 3 | 对敌削精 / HP 是否生效 | ✅ **你那局（9/27 12:41 的 `Nioh1PerfectGuard.gameplay.log`）里已经出现了**：`ENEMY ki damage 70 -> 20`、`ENEMY hp damage 900 -> 850` —— 说明写入路径与范围闸门都按预期工作。**还差一步**：肉眼确认敌人的精力条 / 血条真的动了 |
 | 4 | 你的防御键实际是哪个 | `LEARN key VK=0x..`（`LearnButtons=1` 标定；若用手柄则是 `LEARN pad bit N`） |
 | 5 | **精防回血（本轮新增）** | `HP restore 前 -> 后 (+增量) max=.. mode=..`（**先掉点血再看**，满血时这一行不会出现，只累加 `hp_full` 计数） |
+| 6 | **三个限时增益是否真的生效（本轮新增）** | ①看 `BUFF speed start ...` / `BUFF dmgcut start ...` 有没有出现；②**减速感受**：带增益时移速明显更快；③**减伤**：对比被打时的掉血量（应约为原来的 96%）；④霸体要先把 `ArmorBuff=1`，被打时**不应进入受击动作**（`LAYOUT` 的 `action` 不变）但 HP 照掉；⑤带增益约 10 秒后应出现 `BUFF dmgcut end ...` |
 
 顺带留意：`PERFECT GUARD` 与 `GUARD pressed` 的次数关系（验证窗口是否合适）、
 以及**第 4 号场景**——故意让敌人格挡你的攻击，应当只出现
