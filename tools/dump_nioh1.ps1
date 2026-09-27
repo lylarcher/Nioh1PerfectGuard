@@ -7,7 +7,7 @@
 # Usage:  pwsh -File tools\dump_nioh1.ps1 [-KeepRunning]
 param(
     [switch]$KeepRunning,
-    [string]$GameDir = 'E:\SteamLibrary\steamapps\common\Nioh',
+    [string]$GameDir = '',
     [string]$OutDir  = (Join-Path (Split-Path -Parent $PSScriptRoot) '_work')
 )
 

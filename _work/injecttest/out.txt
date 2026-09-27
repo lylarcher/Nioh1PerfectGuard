@@ -1,4 +1,0 @@
-pid=37568 module=inject_target.exe base=0x7FF766390000 tick_rva=0x1000
-wrote D:\AIWorkspace\DSHWorkSpcae\Nioh1PerfectGuardMod\_work\injecttest\probe.ini
-running for 10s, calling tick() every 200ms
-done, sink=1225

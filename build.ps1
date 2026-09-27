@@ -21,7 +21,7 @@
 param(
     [switch]$Install,
     [switch]$SkipTests,
-    [string]$GameDir = 'E:\SteamLibrary\steamapps\common\Nioh'
+    [string]$GameDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -238,6 +238,9 @@ function Merge-Ini {
 }
 
 function Install-ToGame {
+    if (-not $GameDir) {
+        throw '请用 -GameDir 指定游戏目录，例如 -GameDir "D:\SteamLibrary\steamapps\common\Nioh"'
+    }
     Write-Head "安装到 $GameDir"
     if (Get-Process -Name nioh -ErrorAction SilentlyContinue) {
         throw '游戏正在运行，DLL 被占用；请先退出游戏再执行 -Install'
