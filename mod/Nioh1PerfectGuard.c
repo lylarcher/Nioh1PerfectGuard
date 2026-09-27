@@ -1281,19 +1281,70 @@ static void apply_hp_restore(void) {
 #define PG_RVA_STATE_ADD 0x7A2890
 #define PG_RVA_STATE_REMOVE 0x7A25C0
 
-// Parameter pair the engine itself passes for a damage-rate state (measured at
-// its own call site: 300 and 0.95). We keep the first constant and change only
-// the rate, so our call differs from the engine's usage as little as possible.
-#define PG_STATE_DMGRATE_PARAM_A 300.0f
+// The constructors take (manager, duration_seconds, multiplier). Both were read
+// off the engine's own call sites: it passes 300 / 1800 / 2400 seconds and
+// multipliers like 0.95 (damage) and 0.7 (speed). So the first parameter is a
+// *duration*, not a magnitude -- which is exactly why this mod still needs its own
+// watchdog: the engine would keep our state for 300 seconds, we want 10.
+//
+// Armour is a flag-like state: it has no magnitude to scale, so it is created with
+// the very multiplier the engine itself uses (1.5) rather than a number we invented.
+#define PG_STATE_DURATION_S 300.0f
+#define PG_ARMOR_PARAM_B 1.5f
 
 static PgBuff g_buff_speed, g_buff_dmgcut, g_buff_armor;
 static volatile LONG g_buff_started, g_buff_ended, g_buff_failed;
 static LONG g_buff_log = 0, g_buff_log_cap = 0;
 
-// The engine state object currently installed for the damage-cut buff (NULL when
-// none). Only ever touched by the thread that performs the engine calls.
-static void *g_dmgcut_obj = NULL;
-static int g_dmgcut_installed = 0;
+// The engine state object currently installed for each buff (NULL when none), and
+// whether it is in place. Only ever touched by the thread that makes the calls.
+typedef struct {
+    const char *name;              // for the logs
+    int state_id;
+    unsigned long long ctor_rva;
+    PgBuff *timer;
+    void *obj;
+    int installed;
+} BuffEngine;
+
+static BuffEngine g_eng[3];
+
+static void buff_engine_init(void) {
+    if (g_eng[0].name) return;
+    g_eng[0].name = "speed";
+    g_eng[0].state_id = PG_STATE_ID_MOVE_SPEED;
+    g_eng[0].ctor_rva = PG_RVA_STATE_CTOR_MOVE_SPEED;
+    g_eng[0].timer = &g_buff_speed;
+    g_eng[1].name = "dmgcut";
+    g_eng[1].state_id = PG_STATE_ID_DAMAGE_RATE;
+    g_eng[1].ctor_rva = PG_RVA_STATE_CTOR_DAMAGE_RATE;
+    g_eng[1].timer = &g_buff_dmgcut;
+    g_eng[2].name = "armor";
+    g_eng[2].state_id = PG_STATE_ID_ARMOR;
+    g_eng[2].ctor_rva = PG_RVA_STATE_CTOR_ARMOR;
+    g_eng[2].timer = &g_buff_armor;
+}
+
+// The multiplier each buff asks for: 1.04 for +4% speed, 0.96 for -4% damage, and
+// the engine's own value for armour (nothing to scale).
+static float buff_rate(int i) {
+    if (i == 0) return 1.0f + g_cfg.speed_buff_percent / 100.0f;
+    if (i == 1) return 1.0f - g_cfg.damage_cut_percent / 100.0f;
+    return PG_ARMOR_PARAM_B;
+}
+
+// Whether this buff is configured to exist at all.
+static int buff_enabled(int i) {
+    if (i == 0) return g_cfg.speed_buff_percent > 0.0f && g_cfg.speed_buff_ms > 0;
+    if (i == 1) return g_cfg.damage_cut_percent > 0.0f && g_cfg.damage_cut_ms > 0;
+    return g_cfg.armor_buff && g_cfg.armor_buff_ms > 0;
+}
+
+static int buff_installed_mask(void) {
+    int m = 0;
+    for (int i = 0; i < 3; ++i) if (g_eng[i].installed) m |= (1 << i);
+    return m;
+}
 
 typedef void *(*pg_state_ctor_fn)(void *mgr, float a, float b);
 typedef unsigned char (*pg_state_add_fn)(void *mgr, int key, void *obj, int flags,
@@ -1331,12 +1382,13 @@ static int ctor_stamps_state_id(const unsigned char *p, int scan, int state_id) 
 
 static int g_buff_engine_ok = -1;   // -1 = not checked yet, 0 = mismatch, 1 = ok
 
+// Every constructor is checked, not just the one we happen to install first: all
+// three share a prologue, so each must prove it stamps its own state id.
 static int buff_engine_verify(void) {
     if (g_buff_engine_ok >= 0) return g_buff_engine_ok;
     g_buff_engine_ok = 0;
     if (!g_base) return 0;
-    const unsigned char *p_ctor =
-        (const unsigned char *)(ULONG_PTR)(g_base + PG_RVA_STATE_CTOR_DAMAGE_RATE);
+    buff_engine_init();
     const unsigned char *p_add =
         (const unsigned char *)(ULONG_PTR)(g_base + PG_RVA_STATE_ADD);
     const unsigned char *p_rem =
@@ -1346,11 +1398,19 @@ static int buff_engine_verify(void) {
     static const unsigned char want_rem[13] = {0x48, 0x85, 0xD2, 0x74, 0x44, 0x53, 0x48,
                                                0x83, 0xEC, 0x20, 0x80, 0x7A, 0x1D};
     int ok = bytes_match(p_add, want_add, sizeof(want_add)) &&
-             bytes_match(p_rem, want_rem, sizeof(want_rem)) &&
-             ctor_stamps_state_id(p_ctor, 0x60, PG_STATE_ID_DAMAGE_RATE);
-    log_line("BUFF engine functions %s (ctor=0x%llX add=0x%llX remove=0x%llX)",
+             bytes_match(p_rem, want_rem, sizeof(want_rem));
+    for (int i = 0; i < 3 && ok; ++i) {
+        const unsigned char *p =
+            (const unsigned char *)(ULONG_PTR)(g_base + g_eng[i].ctor_rva);
+        if (!ctor_stamps_state_id(p, 0x60, g_eng[i].state_id)) {
+            ok = 0;
+            log_line("BUFF engine MISMATCH: the constructor at 0x%llX does not stamp "
+                     "state id 0x%X (%s) -- engine calls disabled",
+                     (unsigned long long)(ULONG_PTR)p, g_eng[i].state_id, g_eng[i].name);
+        }
+    }
+    log_line("BUFF engine functions %s (add=0x%llX remove=0x%llX)",
              ok ? "verified against this build" : "MISMATCH -- engine calls disabled",
-             (unsigned long long)(ULONG_PTR)p_ctor,
              (unsigned long long)(ULONG_PTR)p_add,
              (unsigned long long)(ULONG_PTR)p_rem);
     g_buff_engine_ok = ok;
@@ -1367,64 +1427,67 @@ static void *buff_manager(void) {
     return (void *)((char *)param + 0x10B0);
 }
 
-// Install the damage-cut state. Returns 1 when a state object is (or already was)
-// in place.
+// Install one buff's state object. Returns 1 when a state object is (or already
+// was) in place.
 //
-// The key passed to add() is the engine's own ordering key for that container
-// (measured: it compares against the node's +0x20 and replaces a node with the
-// same state id). We reuse the value the engine used for this same class so our
-// entry sorts where its own would.
-static int buff_dmgcut_install(void) {
-    if (g_dmgcut_installed) return 1;
+// The key passed to add() is the engine's ordering key for that container
+// (measured: it compares against the node's +0x20, then checks the node's state id
+// for a same-state replacement). We key by state id: the engine's own applications
+// of these classes use other keys (0x45 / 0x16 / 0x34), so ours cannot displace a
+// game buff, and re-installing our own replaces our own -- the refresh we want.
+static int buff_engine_install(int i) {
+    buff_engine_init();
+    BuffEngine *e = &g_eng[i];
+    if (e->installed) return 1;
     if (!buff_engine_calls_enabled()) return 0;
     if (!buff_engine_verify()) return 0;
     void *mgr = buff_manager();
     if (!mgr) return 0;
 
-    float rate = 1.0f - g_cfg.damage_cut_percent / 100.0f;
+    float rate = buff_rate(i);
     if (rate < 0.0f) rate = 0.0f;
-    if (rate > 1.0f) rate = 1.0f;
 
-    pg_state_ctor_fn ctor =
-        (pg_state_ctor_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_CTOR_DAMAGE_RATE);
+    pg_state_ctor_fn ctor = (pg_state_ctor_fn)(ULONG_PTR)(g_base + e->ctor_rva);
     pg_state_add_fn add = (pg_state_add_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_ADD);
 
     if (g_buff_log < 40) {
-        log_line("BUFF dmgcut: installing engine state %d rate=%.4f mgr=0x%llX "
-                 "ctor=0x%llX add=0x%llX", PG_STATE_ID_DAMAGE_RATE, rate,
-                 (unsigned long long)mgr,
-                 (unsigned long long)(ULONG_PTR)ctor,
-                 (unsigned long long)(ULONG_PTR)add);
+        log_line("BUFF %s: installing engine state 0x%X rate=%.4f dur=%.0fs "
+                 "mgr=0x%llX ctor=0x%llX", e->name, e->state_id, rate,
+                 (double)PG_STATE_DURATION_S, (unsigned long long)mgr,
+                 (unsigned long long)(ULONG_PTR)ctor);
         g_buff_log++;
     }
-    void *obj = ctor(mgr, PG_STATE_DMGRATE_PARAM_A, rate);
+    void *obj = ctor(mgr, PG_STATE_DURATION_S, rate);
     if (!obj) {
-        if (g_buff_log < 40) { log_line("BUFF dmgcut: constructor returned NULL"); g_buff_log++; }
+        if (g_buff_log < 40) { log_line("BUFF %s: constructor returned NULL", e->name); g_buff_log++; }
         InterlockedIncrement(&g_buff_failed);
         return 0;
     }
-    unsigned char ok = add(mgr, PG_STATE_ID_DAMAGE_RATE, obj, -1, 0);
-    g_dmgcut_obj = obj;
-    g_dmgcut_installed = 1;
+    unsigned char ok = add(mgr, e->state_id, obj, -1, 0);
+    e->obj = obj;
+    e->installed = 1;
     if (g_buff_log < 40) {
-        log_line("BUFF dmgcut: state object 0x%llX added (add()=%u)",
+        log_line("BUFF %s: state object 0x%llX added (add()=%u)", e->name,
                  (unsigned long long)obj, (unsigned)ok);
         g_buff_log++;
     }
     return 1;
 }
 
-// Take the damage-cut state away again.
-static void buff_dmgcut_remove(void) {
-    if (!g_dmgcut_installed) return;
+// Take one buff's state away again.
+static void buff_engine_remove(int i) {
+    buff_engine_init();
+    BuffEngine *e = &g_eng[i];
+    if (!e->installed) return;
     void *mgr = buff_manager();
-    void *obj = g_dmgcut_obj;
-    g_dmgcut_obj = NULL;
-    g_dmgcut_installed = 0;
+    void *obj = e->obj;
+    e->obj = NULL;
+    e->installed = 0;
     if (!mgr || !obj || !buff_engine_calls_enabled()) return;
     pg_state_remove_fn rem = (pg_state_remove_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_REMOVE);
     if (g_buff_log < 40) {
-        log_line("BUFF dmgcut: removing state object 0x%llX", (unsigned long long)obj);
+        log_line("BUFF %s: removing state object 0x%llX", e->name,
+                 (unsigned long long)obj);
         g_buff_log++;
     }
     rem(mgr, obj);
@@ -1432,70 +1495,76 @@ static void buff_dmgcut_remove(void) {
 
 // Arm the timers. Called from the VEH -- pure arithmetic only, no engine calls.
 static void buffs_on_perfect_guard(unsigned long long now) {
-    if (g_cfg.speed_buff_percent > 0.0f && g_cfg.speed_buff_ms > 0)
-        if (pg_buff_start(&g_buff_speed, now, g_cfg.speed_buff_ms)) {
-            InterlockedIncrement(&g_buff_started);
-            if (g_buff_log < 40) {
-                log_line("BUFF speed start +%g%% for %dms (proc #%ld)",
-                         (double)g_cfg.speed_buff_percent, g_cfg.speed_buff_ms,
-                         g_buff_speed.procs);
-                g_buff_log++;
-            }
+    buff_engine_init();
+    if (buff_enabled(0) &&
+        pg_buff_start(&g_buff_speed, now, g_cfg.speed_buff_ms)) {
+        InterlockedIncrement(&g_buff_started);
+        if (g_buff_log < 40) {
+            log_line("BUFF speed start +%g%% for %dms (proc #%ld)",
+                     (double)g_cfg.speed_buff_percent, g_cfg.speed_buff_ms,
+                     g_buff_speed.procs);
+            g_buff_log++;
         }
-    if (g_cfg.damage_cut_percent > 0.0f && g_cfg.damage_cut_ms > 0)
-        if (pg_buff_start(&g_buff_dmgcut, now, g_cfg.damage_cut_ms)) {
-            InterlockedIncrement(&g_buff_started);
-            if (g_buff_log < 40) {
-                log_line("BUFF dmgcut start -%g%% for %dms (proc #%ld)",
-                         (double)g_cfg.damage_cut_percent, g_cfg.damage_cut_ms,
-                         g_buff_dmgcut.procs);
-                g_buff_log++;
-            }
+    }
+    if (buff_enabled(1) &&
+        pg_buff_start(&g_buff_dmgcut, now, g_cfg.damage_cut_ms)) {
+        InterlockedIncrement(&g_buff_started);
+        if (g_buff_log < 40) {
+            log_line("BUFF dmgcut start -%g%% for %dms (proc #%ld)",
+                     (double)g_cfg.damage_cut_percent, g_cfg.damage_cut_ms,
+                     g_buff_dmgcut.procs);
+            g_buff_log++;
         }
-    if (g_cfg.armor_buff && g_cfg.armor_buff_ms > 0)
-        if (pg_buff_start(&g_buff_armor, now, g_cfg.armor_buff_ms)) {
-            InterlockedIncrement(&g_buff_started);
-            if (g_buff_log < 40) {
-                log_line("BUFF armor start for %dms (proc #%ld)", g_cfg.armor_buff_ms,
-                         g_buff_armor.procs);
-                g_buff_log++;
-            }
+    }
+    if (buff_enabled(2) &&
+        pg_buff_start(&g_buff_armor, now, g_cfg.armor_buff_ms)) {
+        InterlockedIncrement(&g_buff_started);
+        if (g_buff_log < 40) {
+            log_line("BUFF armor start for %dms (proc #%ld)", g_cfg.armor_buff_ms,
+                     g_buff_armor.procs);
+            g_buff_log++;
         }
+    }
 }
 
-// The watchdog: runs on our own thread. Applies the engine state shortly after the
-// guard, keeps it applied while the window is open, and takes it away when the
+// The watchdog: runs on our own thread. Applies each engine state shortly after
+// the guard, keeps it applied while its window is open, and takes it away when the
 // window closes -- including the case where the window closed while the game was
 // busy, because removal is driven by the timer, not by an event.
 static void buff_tick(void) {
+    buff_engine_init();
     unsigned long long now = now_ms();
-    int expired_dmgcut = pg_buff_step(&g_buff_dmgcut, now);
-    pg_buff_step(&g_buff_speed, now);
-    pg_buff_step(&g_buff_armor, now);
-
-    if (g_buff_dmgcut.active) {
-        if (!g_dmgcut_installed) buff_dmgcut_install();
-    } else if (g_dmgcut_installed) {
-        buff_dmgcut_remove();
-    }
-    if (expired_dmgcut) {
-        InterlockedIncrement(&g_buff_ended);
-        if (g_buff_log_cap < 40) {
-            log_line("BUFF dmgcut end (held %dms, %ld procs total)",
-                     g_cfg.damage_cut_ms, g_buff_dmgcut.procs);
-            g_buff_log_cap++;
+    for (int i = 0; i < 3; ++i) {
+        PgBuff *t = g_eng[i].timer;
+        int expired = pg_buff_step(t, now);
+        if (t->active) {
+            if (!g_eng[i].installed) buff_engine_install(i);
+        } else if (g_eng[i].installed) {
+            buff_engine_remove(i);
+        }
+        if (expired) {
+            InterlockedIncrement(&g_buff_ended);
+            if (g_buff_log_cap < 40) {
+                log_line("BUFF %s end (held %dms, %ld procs total)", g_eng[i].name,
+                         i == 0 ? g_cfg.speed_buff_ms
+                                : (i == 1 ? g_cfg.damage_cut_ms : g_cfg.armor_buff_ms),
+                         t->procs);
+                g_buff_log_cap++;
+            }
         }
     }
 }
 
-// Nothing may stay applied once the mod stops caring: if the buff is off in the
-// configuration but a state object is still installed (the operator edited the INI
-// while it was active), take it away on the next tick.
+// Nothing may stay applied once the mod stops caring: if a buff is switched off in
+// the configuration while its state object is still installed (the operator edited
+// the INI mid-window), take it away on the next tick.
 static void buff_watchdog_config(void) {
-    if (g_dmgcut_installed &&
-        (g_cfg.damage_cut_percent <= 0.0f || g_cfg.damage_cut_ms <= 0 || !g_cfg.enabled)) {
-        buff_dmgcut_remove();
-        pg_buff_init(&g_buff_dmgcut);
+    buff_engine_init();
+    for (int i = 0; i < 3; ++i) {
+        if (g_eng[i].installed && (!buff_enabled(i) || !g_cfg.enabled)) {
+            buff_engine_remove(i);
+            pg_buff_init(g_eng[i].timer);
+        }
     }
 }
 
@@ -1933,7 +2002,7 @@ static void dump_state(const char *why) {
     log_line("STATE ctx=0x%llX charA=0x%llX charB=0x%llX | blocks=%ld perfect=%ld "
              "rewards=%ld freeguards=%ld rearmed=%ld purged=%ld | hp_restores=%ld "
              "hp_total=%ld hp_full=%ld | buff_started=%ld buff_ended=%ld "
-             "buff_failed=%ld dmgcut_installed=%d left spd=%lldms dmgcut=%lldms "
+             "buff_failed=%ld buff_installed=0x%X left spd=%lldms dmgcut=%lldms "
              "armor=%lldms",
              (unsigned long long)ctx, (unsigned long long)ca, (unsigned long long)cb,
              g_blocks, g_perfect, g_rewards, g_free,
@@ -1945,7 +2014,7 @@ static void dump_state(const char *why) {
              InterlockedCompareExchange(&g_buff_started, 0, 0),
              InterlockedCompareExchange(&g_buff_ended, 0, 0),
              InterlockedCompareExchange(&g_buff_failed, 0, 0),
-             g_dmgcut_installed,
+             buff_installed_mask(),
              (long long)pg_buff_left_ms(&g_buff_speed, now_ms()),
              (long long)pg_buff_left_ms(&g_buff_dmgcut, now_ms()),
              (long long)pg_buff_left_ms(&g_buff_armor, now_ms()));
