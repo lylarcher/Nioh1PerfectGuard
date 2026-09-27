@@ -19,7 +19,7 @@
 param(
     [int]$WaitSeconds = 180,
     [switch]$KeepRunning,
-    [string]$GameDir = 'E:\SteamLibrary\steamapps\common\Nioh',
+    [string]$GameDir = '',
     [int]$SteamAppId = 485510
 )
 

@@ -17,7 +17,7 @@
 param(
     [ValidateSet('observe', 'freeguard')][string]$Mode = 'observe',
     [switch]$Dump,
-    [string]$GameDir = 'E:\SteamLibrary\steamapps\common\Nioh',
+    [string]$GameDir = '',
     [string]$Root    = (Split-Path -Parent $PSScriptRoot)
 )
 

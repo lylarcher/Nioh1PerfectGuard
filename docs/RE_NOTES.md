@@ -31,9 +31,9 @@
 
 ```powershell
 $env:SteamAppId='485510'; $env:SteamGameId='485510'
-Start-Process -FilePath 'E:\SteamLibrary\steamapps\common\Nioh\nioh.exe' `
+Start-Process -FilePath '<游戏目录>\nioh.exe' `
   -ArgumentList '--disable-d3d-debug' `
-  -WorkingDirectory 'E:\SteamLibrary\steamapps\common\Nioh'
+  -WorkingDirectory '<游戏目录>'
 ```
 
 然后用 `.pdata`/工具抓取（见下），抓完关闭 `nioh.exe`。**不需要往游戏目录放任何文件。**
@@ -888,7 +888,7 @@ KITRACE ki=210.5/250 | entry7 flag=1 cur=1180 cost=6.4   <-- changed
 ### 4.15.1 安装
 
 ```
-E:\SteamLibrary\steamapps\common\Nioh\
+<游戏目录>\
   nioh.exe
   dinput8.dll                       ← balfa 的 NiohNativeModLoader
   mods\Nioh1PerfectGuard\
@@ -3812,6 +3812,6 @@ Watch2=player_stamina;0x18A0490;+0x240;+0x40;16
 所以 7.1 的四项只能由人操作一局。
 
 **给玩家的一行操作**：Steam 启动 → 新游戏 → 进关卡打一场 →
-把 `E:\SteamLibrary\steamapps\common\Nioh\mods\Nioh1PerfectGuard\Nioh1PerfectGuard.gameplay.log` 发回。
+把 `<游戏目录>\mods\Nioh1PerfectGuard\Nioh1PerfectGuard.gameplay.log` 发回。
 
 > Nioh 1 有在线存档校验，建议**离线模式**游玩以免 MOD 影响云端存档。

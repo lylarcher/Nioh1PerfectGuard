@@ -53,3 +53,6 @@ Nioh1PerfectGuard.gameplay.log
 Nioh1PerfectGuard.selftest.log
 Nioh1PerfectGuard.state
 *.dmp
+_work/**/*.log
+_work/**/out.txt
+_work/*.log
