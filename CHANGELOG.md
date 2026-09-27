@@ -136,19 +136,19 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
   - 必须是**按下沿**（按住不放不会反复触发）；
   - 攻击键在防御按下沿**前后 100ms**（`ComboGuardWindowMs`）内有过按下沿 → 视为组合键，不取消；
   - **攻击键还按着不算组合键** —— 打完没松手是最常见的情况，若按"按着就不算"处理，最该取消时反而取消不了。
-    想要字面读法可以设 `CancelAttackStrictHold=1`；
-  - **不区分精防与普通防御**：只要防御键**按下**就取消（`CancelAttackRecentMs=0` 默认关闭了
+    想要字面读法可以设 `CancelActionStrictHold=1`；
+  - **不区分精防与普通防御**：只要防御键**按下**就取消（`CancelActionRecentMs=0` 默认关闭了
     “必须先打过攻击”这道闸门）。想恢复那道闸门就把它设成非 0；
   - **武技（防御+X/Y/A）的两个方向都按预期**，并有 7 条断言专门钉住：
     ①*武技输入本身不会取消别的攻击*（它落在组合键窗口内 → 跳过。两种按下顺序都测了）；
     ②*武技进行中仍可被后来的单按防御取消*（武技自己的攻击键是很久以前按下的，
-    不会被当成组合键；就算手指还按着也算"单按防御"，除非开 `CancelAttackStrictHold=1`）；
+    不会被当成组合键；就算手指还按着也算"单按防御"，除非开 `CancelActionStrictHold=1`）；
     组合键窗口默认 100ms，手速慢可以调大（`ComboGuardWindowMs`）；
-  - 取消之后还会再采一次动作 ID，打出 `ATTACK CANCEL follow-up: action N -> M`
+  - 取消之后还会再采一次动作 ID，打出 `ACTION CANCEL follow-up: action N -> M`
     —— 只有动作**真的换了**（M 通常是防御/待机）才算"防御立刻接管"，这是这项功能的硬证据；
   - **完全不看摇杆/方向键**（函数里没有这些入参）→ 防御+移动照样取消。
-- 日志：`ATTACK CANCEL: action=.. motion frame .. -> ..`；没取消时会打
-  `ATTACK CANCEL skipped: guard+attack combination` 或 `no attack started recently`，一眼能看出为什么没触发。
+- 日志：`ACTION CANCEL: action=.. motion frame .. -> ..`；没取消时会打
+  `ACTION CANCEL skipped: guard+attack combination` 或 `no attack started recently`，一眼能看出为什么没触发。
 
 ### 2.0e 三个限时增益：**按你的决定停用**（保留代码、默认全关）
 

@@ -114,9 +114,9 @@ apply **within about a second** while the game is running.
 | `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **Move-speed buff after a perfect guard** (0 = off). Set to 4 to enable. ⚠ Off this round: it is the only feature that calls game code and it is not yet verified in game |
 | `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **Damage-taken reduction after a perfect guard** (0 = off). Set to 4 to enable |
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **Armour** (dropped by decision, see below) |
-| `CancelAttackOnGuard` | **1** | **A pure guard press cancels the current attack** (0 = off). Guard+X/Y/A is a combination and does not cancel; movement is irrelevant |
+| `CancelActionOnGuard` | **1** | **A pure guard press cancels the current action** (0 = off): attacks/skills, drinking and using items, onmyo talismans, ninjutsu, throwing items. Guard+X/Y/A is a combination and does not cancel; movement is irrelevant |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | Which buttons count as attacks / how close a press counts as a combination |
-| `CancelAttackStrictHold` / `CancelAttackFrames` / `CancelAttackRecentMs` | 0 / 30 / **0** | Strict “held blocks” mode / motion frames advanced / **0 = any guard press cancels** (perfect and normal blocks alike) |
+| `CancelActionStrictHold` / `CancelActionFrames` / `CancelActionRecentMs` | 0 / 30 / **0** | Strict “held blocks” mode / motion frames advanced / **0 = any guard press cancels** (perfect and normal blocks alike) |
 | `BlockEventSource` | 2 | **Which event means the player blocked**: `2` auto (recommended) / `0` guard-cost site only / `1` guard-flag site only |
 | `DiagDisable` | 0 | Diagnostic bitmask, keep at 0: `1` no breakpoints / `2` no input thread / `4` enable the rolling re-arm (**known to crash the game**) / `8` skip the self-test |
 | `EnemyKiDamage` | 0 | Ki damage to the attacker (`[[char+0x240]+0x40]`) |

@@ -81,7 +81,7 @@ the INI).
 
 * Implementation of every shipped feature is complete; `build.ps1` is green.
 * Verified **in game**: perfect-guard detection and rewards, HP restore, and
-  guard-cancels-attack (confirmed by the author, `ATTACK CANCEL` +
+  guard-cancels-attack (confirmed by the author, `ACTION CANCEL` +
   `follow-up: action N -> M` in the log).
 * Pending in game: the martial-skill (guard + X/Y/A) cases end-to-end, which need the
   skills to be unlocked; the cancel gate already preserves the input by design

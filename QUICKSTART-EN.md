@@ -15,7 +15,7 @@ Chinese version: `QUICKSTART.md` ｜ Engineering notes: `README.md`
 | Guard Ki cost reduction, 100% (blocking costs no Ki) | **on** |
 | Ki recovery (one sixth of maximum Ki) | **on** |
 | HP restore on a perfect guard (3% of maximum HP) | **on** |
-| **A pure guard press cancels your attack action** | **on** |
+| **A pure guard press cancels the action you are performing** (attacks/skills, drinking, talismans, ninjutsu, thrown items) | **on** |
 | Parry sound | **on** |
 | Enemy Ki / HP damage | **off** (`EnemyKiDamage` / `EnemyHpDamage`; nothing is written unless you set them) |
 | Timed buffs (move speed / damage taken / armour) | **dropped** (all off; see `docs/RE_NOTES.md` §4.52) |
@@ -66,9 +66,9 @@ STATUS ACTIVE anchors=4/4 ...
 3. **Lose some HP first** → expect `HP restore 550 -> 576 (+26) max=880 mode=1`.
 4. **Cancel an attack with guard**: start an attack (X/Y), then while it is still
    running press **guard alone** (do not press an attack button with it) → expect
-   `ATTACK CANCEL: action=..` followed by `ATTACK CANCEL follow-up: action .. -> ..`.
+   `ACTION CANCEL: action=..` followed by `ACTION CANCEL follow-up: action .. -> ..`.
    Pressing **guard+X** (the shape of a martial-skill input) must **not** produce
-   `ATTACK CANCEL` — only `ATTACK CANCEL skipped: guard+attack combination ...`.
+   `ACTION CANCEL` — only `ACTION CANCEL skipped: guard+attack combination ...`.
 5. The full checklist is in `ACCEPTANCE_TEST.md` (Chinese).
 
 ## Common adjustments (`Nioh1PerfectGuard.ini`; everything except `Enabled` is hot-reloaded, ~1 s)
@@ -80,9 +80,9 @@ STATUS ACTIVE anchors=4/4 ...
 | change the Ki cost reduction | `KiDamageReductionPercent` (100 = free blocking) |
 | change how Ki comes back | `KiRecoveryMode` (0 none / 1 refund / 2 fixed / **3 one sixth of max**) |
 | change HP restore | `HpRecoveryMode` (**1 percent** / 2 fixed / 3 both / 0 off), `HpRestorePercent` (3), `HpRestoreFixed` (50) |
-| turn the attack cancel off | `CancelAttackOnGuard=0` |
+| turn the attack cancel off | `CancelActionOnGuard=0` |
 | stop a martial skill being read as "guard alone" | raise `ComboGuardWindowMs` from 100 to **150–250** (safer for skills, slightly later cancel) |
-| make the cancel crisper | `CancelAttackFrames` (30; higher skips more animation) |
+| make the cancel crisper | `CancelActionFrames` (30; higher skips more animation) |
 | enable the enemy effects | set `EnemyKiDamage` / `EnemyHpDamage` non-zero (off by default, writes nothing) |
 | the sound | `SoundEnabled` / `SoundVolume` / `SoundFile` (your own 16-bit PCM 44.1/48 kHz WAV) |
 | quieter logs | `KiTrace=0` (worth doing once you are done testing) |
@@ -100,7 +100,7 @@ STATUS ACTIVE anchors=4/4 ...
 | --- | --- |
 | no `ANCHOR` line at all | does `mods\loader.log` show the mod being loaded? is the DLL in the right place? |
 | lots of "not a perfect guard", never `PERFECT GUARD` | the guard button is not bound/configured (see `LearnButtons` above) |
-| guard does not cancel the attack | the reason is printed after `ATTACK CANCEL skipped:` (combination? no attack started recently?) |
+| guard does not cancel the attack | the reason is printed after `ACTION CANCEL skipped:` (combination? no attack started recently?) |
 | no parry sound | the `SOUND ...` lines, against the sound troubleshooting table in `README_CN.md` |
 | the game crashes | send `%LOCALAPPDATA%\CrashDumps\nioh.exe.*.dmp` plus the log; use `DiagDisable` to bisect |
 | cannot install / DLL in use | the game must be closed first; a protected leftover `nioh.exe` needs an **elevated** Task Manager (or a reboot) |
