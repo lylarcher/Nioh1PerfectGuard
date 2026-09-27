@@ -30,6 +30,13 @@ _work/**/*.out
 # 注意：_work 下的 .c / .ini / .log 小文件（probe.c、dr7test.c、probe.log …）
 #      是探针阶段的证据，保留。
 
+# ── 由 build.ps1 生成，不入库 ────────────────────────────────────────────────
+#    跑一次 .\build.ps1（或双击 build.cmd）即可重新生成完整交付包。
+/dist/
+mod/Nioh1PerfectGuard.dll
+mod/Nioh1PerfectGuard.lib
+tools/test_logic.exe
+
 # ── 编译残留 ─────────────────────────────────────────────────────────────────
 *.pdb
 *.obj

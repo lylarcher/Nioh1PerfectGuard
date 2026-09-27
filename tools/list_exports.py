@@ -1,5 +1,11 @@
-﻿import struct, sys
-from tools.dump_pe import PE
+import os, struct, sys
+
+# Import dump_pe from this file's own directory rather than relying on the caller
+# having set PYTHONPATH -- build.ps1 does not set it, and the check failed with
+# "No module named 'tools'" until this was made self-locating.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dump_pe import PE  # noqa: E402
+
 data = open(sys.argv[1], "rb").read()
 pe = PE(data)
 secs = pe.sections
