@@ -1,5 +1,7 @@
 # Nioh 1 Perfect Guard — a reverse-engineered gameplay mod
 
+By **lylarcher** — source: <https://github.com/lylarcher/Nioh1PerfectGuard>
+
 A mod for **Nioh 1 Complete Edition** (`nioh.exe` 1.24.8) that adds a *perfect guard*
 — block at the moment you are hit and you get rewarded — plus a set of related
 player-side rewards. Chinese version: [`README-CN.md`](README-CN.md).
@@ -101,6 +103,7 @@ the INI).
 ## License
 
 **PolyForm Noncommercial License 1.0.0** — see [`LICENSE`](LICENSE).
+Copyright (c) 2026 lylarcher.
 Free for **any noncommercial purpose**: personal use, study, hobby projects,
 research, and use by charities, schools, public research bodies and government
 institutions. **Commercial use is not permitted** — you may not sell it, bundle it

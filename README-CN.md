@@ -1,5 +1,7 @@
 # 仁王1 精防 MOD —— 工程说明
 
+作者 **lylarcher** ｜ 源码仓库：<https://github.com/lylarcher/Nioh1PerfectGuard>
+
 给《仁王1 完全版》（`nioh.exe` 1.24.8）加的**精准防御（精防）**MOD：在被击中的一瞬间按下防御，
 就能触发精防并拿到收益。英文版见 [`README.md`](README.md)。
 
@@ -89,6 +91,7 @@ build.cmd                # 双击等价
 ## 授权协议
 
 **PolyForm Noncommercial License 1.0.0**（非商业许可）—— 全文见 [`LICENSE`](LICENSE)。
+版权所有 (c) 2026 lylarcher。
 
 **允许的非商业用途**：个人使用、学习研究、业余/爱好项目、以及慈善机构、学校、
 公立研究机构、公共安全与卫生机构、环保组织、政府机构的使用。

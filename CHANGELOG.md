@@ -1,5 +1,6 @@
 # Nioh1PerfectGuard —— 交付说明与变更记录
 
+> 作者：**lylarcher** ｜ 源码仓库：<https://github.com/lylarcher/Nioh1PerfectGuard>
 > 目标游戏：**仁王1 完全版**（`nioh.exe` 1.24.8）
 > 版本：`0.1.0-nioh1`
 > 本文件说明**哪些已经验证过**、**修过什么**、以及**还剩哪几件事需要你实机确认**。

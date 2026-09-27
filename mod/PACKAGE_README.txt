@@ -95,13 +95,14 @@ loader any more). Nothing else was added.
   here **unmodified** for convenience, exactly as shipped by its author
   (69,120 bytes, sha256 26EFCD7C67E21BC0070E141B1D82117D9FDDD9B1690D955E11822124D27F7FC4).
   If you prefer, delete it and get the loader from its original page instead.
-* Everything else (the mod DLL, config, docs, source) is this project's own
-  work. Its source is included so you can check every memory offset it writes.
+* Everything else (the mod DLL, config, docs, source) is by **lylarcher**.
+  Sources: https://github.com/lylarcher/Nioh1PerfectGuard (included in this package under source\, so you can check
+  every memory offset it writes).
 
 * `dinput8.dll` 是 **balfa** 的 Nioh Native Mod Loader，此处**原样重新分发**
   （未做任何修改）。不想用这份的话，删掉它、去作者原页面下载即可。
-* 其余部分（MOD 本体、配置、文档、源码）都是本项目自己的成果；源码随包提供，
-  你可以自行核对它到底写了哪些内存偏移。
+* 其余部分（MOD 本体、配置、文档、源码）作者 **lylarcher**，源码仓库：
+  https://github.com/lylarcher/Nioh1PerfectGuard（源码也随包放在 source\ 下，你可以自行核对它到底写了哪些内存偏移）。
 
 
 ---------------------------------------------------------------------
