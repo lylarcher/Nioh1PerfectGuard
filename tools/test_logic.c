@@ -593,6 +593,60 @@ static void test_buff(void) {
     CHECK(pg_buff_left_ms(&b, 1400) == 10000, "still the last refresh's full window");
 }
 
+static void test_guard_alone(void) {
+    printf("guard pressed alone (attack cancel input test)\n");
+    PgGuardInput atk;
+    pg_guard_init(&atk);
+
+    // No attack button involved at all: guard alone cancels.
+    CHECK(pg_guard_alone(1, &atk, 1000, PG_COMBO_MS, 0) == 1,
+          "guard by itself must count, with no attack input seen");
+    // ...but only on the guard edge.
+    CHECK(pg_guard_alone(0, &atk, 1000, PG_COMBO_MS, 0) == 0,
+          "a held guard is not a fresh press");
+
+    // Guard + attack pressed together is a combination, not a cancel.
+    pg_guard_init(&atk);
+    pg_guard_update(&atk, 1, 1000);                     // X pressed at the same ms
+    CHECK(pg_guard_alone(1, &atk, 1000, PG_COMBO_MS, 0) == 0,
+          "same-millisecond attack press is a combination");
+    CHECK(pg_guard_alone(1, &atk, 1050, PG_COMBO_MS, 0) == 0,
+          "50ms apart is still a combination");
+    CHECK(pg_guard_alone(1, &atk, 1100, PG_COMBO_MS, 0) == 0,
+          "exactly at the window edge is still a combination");
+    CHECK(pg_guard_alone(1, &atk, 1101, PG_COMBO_MS, 0) == 1,
+          "one ms past the window is guard alone");
+    // an attack press *after* the guard press, inside the window
+    pg_guard_init(&atk);
+    pg_guard_update(&atk, 1, 1050);
+    CHECK(pg_guard_alone(1, &atk, 1000, PG_COMBO_MS, 0) == 0,
+          "an attack press just after the guard press is a combination too");
+    pg_guard_init(&atk);
+    pg_guard_update(&atk, 1, 1200);
+    CHECK(pg_guard_alone(1, &atk, 1000, PG_COMBO_MS, 0) == 1,
+          "an attack press well after the guard press is not the same combination");
+
+    // The case this design exists for: the attack button is still held from the
+    // attack being cancelled -- that must NOT block the cancel.
+    pg_guard_init(&atk);
+    pg_guard_update(&atk, 1, 400);                      // pressed long ago, still down
+    CHECK(atk.down == 1, "the attack button is still held");
+    CHECK(pg_guard_alone(1, &atk, 1000, PG_COMBO_MS, 0) == 1,
+          "a held attack button from an older press must still allow the cancel");
+    // ...unless the operator asks for the literal reading
+    CHECK(pg_guard_alone(1, &atk, 1000, PG_COMBO_MS, 1) == 0,
+          "strict mode refuses while any attack button is held");
+
+    // A zero window means "only the exact same millisecond counts as a combo".
+    pg_guard_init(&atk);
+    pg_guard_update(&atk, 1, 1000);
+    CHECK(pg_guard_alone(1, &atk, 1000, 0, 0) == 0, "window 0 still blocks the same ms");
+    CHECK(pg_guard_alone(1, &atk, 1001, 0, 0) == 1, "window 0 allows 1ms later");
+
+    // Movement is not consulted anywhere in this test: the function has no input
+    // for sticks, which is the point (guard + walking must still cancel).
+}
+
 int main(int argc, char **argv) {
     // --digest prints the shared logic's numeric fingerprint, for comparison with
     // the value the shipped DLL exports. See tools/test_logic_digest.py.
@@ -610,6 +664,7 @@ int main(int argc, char **argv) {
     test_attribution();
     test_hp_restore();
     test_buff();
+    test_guard_alone();
     test_throttle();
     test_kiv();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
