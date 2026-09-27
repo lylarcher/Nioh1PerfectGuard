@@ -1468,15 +1468,26 @@ static int bytes_match(const unsigned char *p, const unsigned char *want, int n)
     return 1;
 }
 
+// Returns the offset of the state-id store, or -1.
+//
+// The window has to be big enough: measured on this build the three constructors
+// stamp their id at +0x61 (armour) and +0x69 (speed / damage rate), i.e. just past
+// a 0x60-byte window -- the first version used 0x60 and therefore refused to call
+// anything ("does not stamp state id"), which is safe but useless. It must not be
+// *too* big either, because these functions contain other state ids further in
+// (+0x101, +0x119, +0x12A, +0x1C1, +0x1D9), so a wide scan could match the wrong
+// one. 0x80 covers all three and stops before the next id.
+#define PG_CTOR_ID_SCAN 0x80
+
 static int ctor_stamps_state_id(const unsigned char *p, int scan, int state_id) {
     for (int i = 0; i + 8 <= scan; ++i) {
         if (p[i] == 0x48 && p[i + 1] == 0xC7 && p[i + 2] == 0x40 && p[i + 3] == 0x10) {
             int v = 0;
             memcpy(&v, p + i + 4, 4);
-            if (v == state_id) return 1;
+            if (v == state_id) return i;
         }
     }
-    return 0;
+    return -1;
 }
 
 static int g_buff_engine_ok = -1;   // -1 = not checked yet, 0 = mismatch, 1 = ok
@@ -1501,11 +1512,13 @@ static int buff_engine_verify(void) {
     for (int i = 0; i < 3 && ok; ++i) {
         const unsigned char *p =
             (const unsigned char *)(ULONG_PTR)(g_base + g_eng[i].ctor_rva);
-        if (!ctor_stamps_state_id(p, 0x60, g_eng[i].state_id)) {
+        int at = ctor_stamps_state_id(p, PG_CTOR_ID_SCAN, g_eng[i].state_id);
+        if (at < 0) {
             ok = 0;
             log_line("BUFF engine MISMATCH: the constructor at 0x%llX does not stamp "
-                     "state id 0x%X (%s) -- engine calls disabled",
-                     (unsigned long long)(ULONG_PTR)p, g_eng[i].state_id, g_eng[i].name);
+                     "state id 0x%X (%s) in its first %d bytes -- engine calls disabled",
+                     (unsigned long long)(ULONG_PTR)p, g_eng[i].state_id, g_eng[i].name,
+                     PG_CTOR_ID_SCAN);
         }
     }
     log_line("BUFF engine functions %s (add=0x%llX remove=0x%llX)",
