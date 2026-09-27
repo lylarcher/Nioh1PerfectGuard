@@ -14,7 +14,7 @@
 | 格挡耗精减免 100%（完全不耗精） | **开** |
 | 回精（回复最大精力的 1/6） | **开** |
 | 精防回血（回最大 HP 的 3%） | **开** |
-| **单按防御键取消攻击动作** | **开** |
+| **单按防御键取消当前动作**（攻击/武技、喝药、上阴阳符、上咒术忍术、丢道具） | **开** |
 | 精防音效 | **开** |
 | 对敌削精 / 扣血 | **关**（`EnemyKiDamage` / `EnemyHpDamage`，默认不写内存）|
 | 限时增益（移速 / 减伤 / 霸体） | **已停用**（默认全关；原因见开发目录里的 `docs\RE_NOTES.md` §4.52，不随包分发）|
@@ -58,9 +58,9 @@ STATUS ACTIVE anchors=4/4 ...
 2. 被打时**看准时机**按防御，做 5 次 → 日志应有 `PERFECT GUARD`。
 3. **先掉点血再做** → 应看到 `HP restore 550 -> 576 (+26) max=880 mode=1`。
 4. **单按防御键取消攻击**：先按 X/Y 打出去，动作还没结束时**只按防御**（别同时按攻击键）
-   → 应看到 `ATTACK CANCEL: action=..` 紧跟 `ATTACK CANCEL follow-up: action .. -> ..`。
-   按**防御+X**（武技的输入形状）时**不该**出现 `ATTACK CANCEL`，只应看到
-   `ATTACK CANCEL skipped: guard+attack combination ...`。
+   → 应看到 `ACTION CANCEL: action=..` 紧跟 `ACTION CANCEL follow-up: action .. -> ..`。
+   按**防御+X**（武技的输入形状）时**不该**出现 `ACTION CANCEL`，只应看到
+   `ACTION CANCEL skipped: guard+attack combination ...`。
 5. 完整清单见 `ACCEPTANCE_TEST.md`。
 
 ## 常用调节（`Nioh1PerfectGuard.ini`；**除 `Enabled` 外全部热更新**，约 1 秒生效）
@@ -72,9 +72,9 @@ STATUS ACTIVE anchors=4/4 ...
 | 觉得减免不够 / 过头 | `KiDamageReductionPercent`（默认 100 = 完全不耗精）|
 | 回精方式 | `KiRecoveryMode`（0 不回 / 1 返还本次 / 2 固定 / **3 最大精力 1/6**）|
 | 回血量与方式 | `HpRecoveryMode`（**1 按百分比** / 2 固定 / 3 两者 / 0 关）、`HpRestorePercent`（3）、`HpRestoreFixed`（50）|
-| 关掉"防御取消攻击" | `CancelAttackOnGuard=0` |
+| 关掉"防御取消攻击" | `CancelActionOnGuard=0` |
 | 武技被误判成"单按防御" | `ComboGuardWindowMs` 从 100 调到 **150–250**（越大越保护武技，代价是取消稍晚）|
-| 取消得不够干脆 | `CancelAttackFrames`（默认 30，调大推进更多动画帧）|
+| 取消得不够干脆 | `CancelActionFrames`（默认 30，调大推进更多动画帧）|
 | 想要对敌效果 | `EnemyKiDamage` / `EnemyHpDamage` 设非 0（默认关闭，不写内存）|
 | 音效 | `SoundEnabled` / `SoundVolume` / `SoundFile`（换成自己的 16-bit PCM 44.1/48k WAV）|
 | 关掉诊断日志 | `KiTrace=0`（验收完建议关，日志更小）|
@@ -90,7 +90,7 @@ STATUS ACTIVE anchors=4/4 ...
 | --- | --- |
 | 日志里完全没有 `ANCHOR` | `mods\loader.log` 里有没有加载本 MOD；DLL 位置对不对 |
 | 一堆"不算精防"、从没 `PERFECT GUARD` | 防御键没配对（键鼠请看上面 `LearnButtons`）|
-| 按防御没取消攻击 | `ATTACK CANCEL skipped:` 后面写的原因（组合键？最近没打过攻击？）|
+| 按防御没取消攻击 | `ACTION CANCEL skipped:` 后面写的原因（组合键？最近没打过攻击？）|
 | 没有精防音效 | 日志里的 `SOUND ...` 行，对照 `README_CN.md` 的「音效排查表」|
 | 游戏崩溃 | 把 `%LOCALAPPDATA%\CrashDumps\nioh.exe.*.dmp` 与日志一起发回；必要时用 `DiagDisable` 逐项排查 |
 | 装不上 / DLL 被占用 | 游戏必须先退出；被保护的残留 `nioh.exe` 需**管理员权限**结束或重启 |
