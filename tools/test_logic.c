@@ -535,6 +535,64 @@ static void test_hp_restore(void) {
     CHECK(r.outcome == PG_HP_FULL, "1/1 is full");
 }
 
+static void test_buff(void) {
+    printf("timed buffs\n");
+    PgBuff b;
+    pg_buff_init(&b);
+    CHECK(!b.active, "a fresh buff is inactive");
+    CHECK(pg_buff_step(&b, 5000) == 0, "stepping an inactive buff does nothing");
+    CHECK(pg_buff_left_ms(&b, 5000) == 0, "an inactive buff has no time left");
+
+    // arm: 0 -> 1 transition is reported once
+    CHECK(pg_buff_start(&b, 1000, 10000) == 1, "arming reports the transition");
+    CHECK(b.active && b.procs == 1, "armed and counted, got procs=%ld", b.procs);
+    CHECK(pg_buff_left_ms(&b, 1000) == 10000, "full duration at the start");
+    CHECK(pg_buff_left_ms(&b, 6000) == 5000, "counts down");
+
+    // refresh: extends, does NOT stack and does NOT re-report the transition
+    CHECK(pg_buff_start(&b, 6000, 10000) == 0, "refreshing must not look like a new arm");
+    CHECK(b.procs == 2, "the refresh is counted, got %ld", b.procs);
+    CHECK(pg_buff_left_ms(&b, 6000) == 10000, "refresh restores the full duration, got %lld",
+          pg_buff_left_ms(&b, 6000));
+
+    // expiry fires exactly once, on the tick that observes it
+    CHECK(pg_buff_step(&b, 15999) == 0, "still inside the window");
+    CHECK(b.active, "still active just before the deadline");
+    CHECK(pg_buff_step(&b, 16000) == 1, "the deadline tick expires it");
+    CHECK(!b.active && b.until_ms == 0, "expired and disarmed");
+    CHECK(pg_buff_step(&b, 16000) == 0, "expiry is not reported twice");
+    CHECK(pg_buff_step(&b, 99999) == 0, "nor on any later tick");
+    CHECK(pg_buff_left_ms(&b, 16000) == 0, "no time left after expiry");
+
+    // re-arming after expiry reports the transition again
+    CHECK(pg_buff_start(&b, 20000, 5000) == 1, "re-arming reports a new transition");
+    CHECK(pg_buff_step(&b, 25000) == 1, "and expires on schedule");
+
+    // duration 0 means "off", not "expires immediately"
+    CHECK(pg_buff_start(&b, 30000, 0) == 0, "duration 0 must not arm");
+    CHECK(!b.active && b.until_ms == 0, "duration 0 leaves it inactive");
+    CHECK(pg_buff_step(&b, 30001) == 0, "and nothing to expire");
+    // a negative duration is treated the same way
+    CHECK(pg_buff_start(&b, 30000, -5) == 0, "a negative duration must not arm");
+
+    // 1 ms is a legal duration (the shortest real case)
+    CHECK(pg_buff_start(&b, 40000, 1) == 1, "1ms arms");
+    CHECK(pg_buff_step(&b, 40000) == 0, "not expired in the same millisecond");
+    CHECK(pg_buff_step(&b, 40001) == 1, "expires at +1ms");
+
+    // a backwards clock must not keep it alive past the deadline
+    CHECK(pg_buff_start(&b, 100000, 5000) == 1, "armed at t=100000");
+    CHECK(pg_buff_step(&b, 100500) == 0, "not yet");
+    CHECK(pg_buff_step(&b, 99000) == 0, "a backwards clock alone does not expire it");
+    CHECK(pg_buff_step(&b, 105000) == 1, "but reaching the deadline does");
+
+    // procs accumulate across arms and refreshes (used for the log)
+    pg_buff_init(&b);
+    for (int i = 0; i < 5; ++i) pg_buff_start(&b, 1000 + i * 100, 10000);
+    CHECK(b.procs == 5, "every proc is counted, got %ld", b.procs);
+    CHECK(pg_buff_left_ms(&b, 1400) == 10000, "still the last refresh's full window");
+}
+
 int main(int argc, char **argv) {
     // --digest prints the shared logic's numeric fingerprint, for comparison with
     // the value the shipped DLL exports. See tools/test_logic_digest.py.
@@ -551,6 +609,7 @@ int main(int argc, char **argv) {
     test_restore();
     test_attribution();
     test_hp_restore();
+    test_buff();
     test_throttle();
     test_kiv();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
