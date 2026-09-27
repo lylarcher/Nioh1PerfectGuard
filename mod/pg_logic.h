@@ -229,6 +229,74 @@ static inline PgHpResult pg_hp_restore(int cur, int max, int mode,
 }
 
 // ---------------------------------------------------------------------------
+// Timed buffs: a perfect guard grants a temporary effect (speed / damage cut /
+// armour). This is the first *stateful* reward in the mod -- everything before
+// it was "write a few fields at the event and be done".
+//
+// The rules the tests pin down, all of which have a way to go wrong:
+//
+//  * One proc **refreshes** the timer to the full duration; repeated procs never
+//    stack the magnitude (the caller applies a fixed value, not a sum).
+//  * Expiry fires **exactly once**, on the tick that observes it. A buff that
+//    reported expiry on every later tick would, in the mod, issue its "remove the
+//    engine state" request forever.
+//  * A duration of 0 means "off", not "expires immediately": an operator who
+//    sets `SpeedBuffMs=0` should get no buff at all rather than a buff that is
+//    applied and removed every tick.
+//  * A clock that jumps backwards must not extend a buff forever. `until_ms` is
+//    an absolute deadline, so a backwards clock only makes the buff look longer
+//    than it is until the clock catches up -- and `pg_buff_step` still expires it
+//    the moment `now` reaches the deadline, never before.
+typedef struct {
+    int active;
+    long procs;                    // procs seen (arming + refreshes)
+    unsigned long long started_ms; // when the current window began
+    unsigned long long until_ms;   // absolute deadline; 0 when inactive
+} PgBuff;
+
+static inline void pg_buff_init(PgBuff *b) {
+    b->active = 0;
+    b->procs = 0;
+    b->started_ms = 0;
+    b->until_ms = 0;
+}
+
+// Arm the buff, or refresh it if already active. Returns 1 only on the
+// inactive -> active transition (that is the moment worth logging).
+//
+// A non-positive duration means "this proc grants nothing": it does not arm, and
+// it deliberately leaves an existing window untouched (an operator who sets the
+// duration to 0 should get no *new* buff, not have a running one cut short). The
+// invariant `until_ms != 0  <=>  active` holds in every path, which is what makes
+// the state unambiguous when dumped or logged.
+static inline int pg_buff_start(PgBuff *b, unsigned long long now, int duration_ms) {
+    if (duration_ms <= 0) return 0;
+    int was = b->active;
+    b->procs++;
+    b->started_ms = now;
+    b->until_ms = now + (unsigned long long)duration_ms;
+    b->active = 1;
+    return !was;
+}
+
+// Call once per tick. Returns 1 exactly once, on the tick that expires it.
+static inline int pg_buff_step(PgBuff *b, unsigned long long now) {
+    if (!b->active) return 0;
+    if (now >= b->until_ms) {
+        b->active = 0;
+        b->until_ms = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static inline long long pg_buff_left_ms(const PgBuff *b, unsigned long long now) {
+    if (!b->active) return 0;
+    if (now >= b->until_ms) return 0;
+    return (long long)(b->until_ms - now);
+}
+
+// ---------------------------------------------------------------------------
 // Diagnostic-stream throttle.
 //
 // A "log whenever the value changed" stream is only safe if the value changes
@@ -611,6 +679,39 @@ static inline unsigned int pg_logic_digest(void) {
                             h = pg_fold_bits(h, (unsigned)r.amount);
                             h = pg_fold_bits(h, (unsigned)r.clamped);
                         }
+    }
+
+    // 9. timed buffs: arm / refresh / expire-once / remaining time
+    {
+        const int durations[4] = {0, 1, 5000, 10000};
+        const unsigned long long ticks[7] = {0, 1, 4999, 5000, 5001, 20000, 30000};
+        for (int di = 0; di < 4; ++di) {
+            PgBuff b;
+            pg_buff_init(&b);
+            h = pg_fold_bits(h, (unsigned)pg_buff_step(&b, 0));      // step while idle
+            h = pg_fold_bits(h, (unsigned)pg_buff_start(&b, 100, durations[di]));
+            h = pg_fold_bits(h, (unsigned)b.active);
+            h = pg_fold_bits(h, (unsigned)b.procs);
+            for (int ti = 0; ti < 7; ++ti) {
+                unsigned long long t = 100 + ticks[ti];
+                h = pg_fold_bits(h, (unsigned)pg_buff_step(&b, t));
+                h = pg_fold_bits(h, (unsigned)pg_buff_left_ms(&b, t));
+                h = pg_fold_bits(h, (unsigned)b.active);
+            }
+            // a refresh part-way through must extend, not stack
+            h = pg_fold_bits(h, (unsigned)pg_buff_start(&b, 5200, durations[di]));
+            for (int ti = 0; ti < 7; ++ti) {
+                unsigned long long t = 5200 + ticks[ti];
+                h = pg_fold_bits(h, (unsigned)pg_buff_step(&b, t));
+                h = pg_fold_bits(h, (unsigned)pg_buff_left_ms(&b, t));
+            }
+            // a backwards clock must not wedge it active
+            h = pg_fold_bits(h, (unsigned)pg_buff_start(&b, 100000, 5000));
+            h = pg_fold_bits(h, (unsigned)pg_buff_step(&b, 100500));
+            h = pg_fold_bits(h, (unsigned)pg_buff_step(&b, 99000));
+            h = pg_fold_bits(h, (unsigned)pg_buff_left_ms(&b, 99000));
+            h = pg_fold_bits(h, (unsigned)b.active);
+        }
     }
 
     return h;
