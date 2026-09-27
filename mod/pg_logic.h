@@ -511,6 +511,41 @@ static inline int pg_flag_means_player_blocked(int a_is_player, int b_is_player,
     return a_is_player || b_is_player;
 }
 
+// ---------------------------------------------------------------------------
+// "Guard pressed on its own" -- the input test for cancelling an attack.
+//
+// The request is: the guard key cancels the player's attack action, but only when
+// guard is pressed *by itself*; guard + X/Y/A (a deliberate combination) must not
+// cancel. Moving the stick is irrelevant -- movement is not consulted at all, which
+// is also why this function takes no stick input.
+//
+// The subtlety is what "by itself" means while an attack is already running: the
+// attack button is often still held from the attack being cancelled, so a rule of
+// "no attack button may be down" would refuse to cancel exactly when the player
+// wants it. What actually distinguishes a combination is that the attack button is
+// pressed *at the same moment* as guard, so the test is edge-based.
+//
+// `strict_hold` offers the literal reading (any attack button held blocks it) for
+// anyone who prefers that; which one feels right depends on how the player holds
+// the buttons, so both exist and the INI chooses.
+#define PG_COMBO_MS 100
+
+// `attack` is the edge tracker for the attack buttons (pg_guard_update drives it);
+// `guard_fresh` is 1 only on the sample where guard went down.
+static inline int pg_guard_alone(int guard_fresh, const PgGuardInput *attack,
+                                unsigned long long now, int combo_ms, int strict_hold) {
+    if (!guard_fresh) return 0;
+    if (strict_hold && attack->down) return 0;
+    if (attack->press_ms) {
+        if (now >= attack->press_ms) {
+            if (now - attack->press_ms <= (unsigned long long)combo_ms) return 0;
+        } else if (attack->press_ms - now <= (unsigned long long)combo_ms) {
+            return 0;          // an attack press marginally later in the same press
+        }
+    }
+    return 1;
+}
+
 // One physical block can be visible to both event sources: the engine may charge
 // the guard Ki and set the guard flag for the same hit, and if the source decision
 // changes between those two events, both would reward it. Collapse them by time.
@@ -711,6 +746,29 @@ static inline unsigned int pg_logic_digest(void) {
             h = pg_fold_bits(h, (unsigned)pg_buff_step(&b, 99000));
             h = pg_fold_bits(h, (unsigned)pg_buff_left_ms(&b, 99000));
             h = pg_fold_bits(h, (unsigned)b.active);
+        }
+    }
+
+    // 10. guard-alone: the combination window in both directions
+    {
+        const int combos[4] = {0, 50, 100, 250};
+        const unsigned long long atk[6] = {0, 900, 1000, 1050, 1100, 1200};
+        for (int ci = 0; ci < 4; ++ci) {
+            for (int ai = 0; ai < 6; ++ai) {
+                PgGuardInput a;
+                pg_guard_init(&a);
+                if (atk[ai]) pg_guard_update(&a, 1, atk[ai]);
+                h = pg_fold_bits(h, (unsigned)pg_guard_alone(1, &a, 1000,
+                                                             combos[ci], 0));
+                h = pg_fold_bits(h, (unsigned)pg_guard_alone(1, &a, 1000,
+                                                             combos[ci], 1));
+                h = pg_fold_bits(h, (unsigned)pg_guard_alone(0, &a, 1000,
+                                                             combos[ci], 0));
+                // an attack button that is held but was pressed long ago
+                pg_guard_update(&a, 1, 400);
+                h = pg_fold_bits(h, (unsigned)pg_guard_alone(1, &a, 1000,
+                                                             combos[ci], 0));
+            }
         }
     }
 

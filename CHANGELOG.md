@@ -140,7 +140,7 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
 | 锚点期望字节与解密镜像逐字节一致 | `python tools\test_anchors.py ..` | **4/4 一致**；输入槽推导得 `0x1B78658`，与独立已知值相符 |
-| 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **166 条断言全过** |
+| 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **179 条断言全过** |
 | INI 编码与取值边界 + **内置默认值必须等于随包 INI** | `python tools\test_ini_encodings.py ..\mod` | **6/6** |
 | 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **43/43 标记；105 条日志 0 条未解释** |
 | 交付文档只引用真实存在的文件 | `python tools\test_doc_paths.py ..` | 通过 |
