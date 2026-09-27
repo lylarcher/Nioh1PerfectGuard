@@ -3171,6 +3171,98 @@ PowerShell 5.1 对无 BOM 的 `.ps1` 按 ANSI 解码，中文立刻变乱码并�
 
 ---
 
+## 4.51 限时增益调研（路线 A）：引擎自带的状态对象体系
+
+**目标**：为"精防后移速 +4% / 减伤 4% / 霸体"找实现机制。**本轮只查，不改 MOD 代码。**
+（需求与方案见 `方案计划-限时增益.md`。）
+
+### 4.51.1 结论先说
+
+引擎里有一套完整的"增益状态对象"体系，三个需求**都有现成的类**，而且**对象由引擎自己分配与析构**
+（不是"我们塞一块静态内存进去"，见 §4.51.4）—— 这比我最初担心的最坏情况好得多。
+
+| 需求 | 类 | **状态 ID** |
+| --- | --- | --- |
+| 移动速度 | `AddStateObjectMoveSpeed::Character` | **0x1B (27)** |
+| 承受伤害 | `AddStateObjectDamageRate::Character` | **0x1E (30)** |
+| 霸体 | `AddStateObjectArmor::Character` | **0x33 (51)** |
+
+邻近可选：`DashMoveSpeed` 0x32、`PhysicalDamageRate` 0x1D、`Defense` 0x01；
+语义过强的（不建议用）：`AbsoluteGuard` 0x3D、`NoDamage` 0x40、`Invincible`。
+
+### 4.51.2 状态 ID → 类的完整映射（84 条，可复现）
+
+每个状态类的**构造函数**里都有一条 `mov qword ptr [rax+0x10], <ID>`，
+构造函数可以通过"谁 `lea` 了该类的虚表"定位（`tools\ripref.py`）。
+用这两点刷一遍构造函数区间 `0x79C000..0x7A3000`，就能把 **ID → 类名**全部导出
+（类名来自 `_work\nioh1.rtti.json` 的 `vftable_rva → pretty`）：
+
+```
+id=0x01 Defense      id=0x05 HpDamage      id=0x1B MoveSpeed   id=0x33 Armor
+id=0x03 DefenseElem  id=0x06 StaminaRecov  id=0x1D PhysDmgRate id=0x34 UseStaminaRate
+id=0x04 HealArea     id=0x09 Fire          id=0x1E DamageRate  id=0x40 NoDamage ...
+```
+
+### 4.51.3 三个关键地址
+
+| 东西 | 地址 | 说明 |
+| --- | --- | --- |
+| 状态容器（挂在角色上） | **`[[char+0x240]] + 0x10B0`** | 与既有认知吻合：玩家资源表是 `param+0xBB0 + i*0x50`，`+0x10B0` 正好是它之后 |
+| 施加状态函数 | **`0x7A2890`** | `rcx=容器, edx=某整数, r8=状态对象, r9d=写入 [obj+0x24], [rsp+0x20]=0` |
+| 移除路径 | **`0x7A25C0`** | `0x7A2890` 在 `edx == -1` 时转到这里（`rcx=容器, rdx=对象`） |
+
+`0x7A2890` 会**对对象调用虚函数**（slot 0 与 slot 7），并先调 `0x7B4290` 做一次校验 ——
+也就是说引擎会**接管并最终析构**这个对象。这决定了"不能塞静态内存"（§4.51.4）。
+
+### 4.51.4 构造函数自己负责分配（关键）
+
+以 `AddStateObjectDamageRate` 的构造函数 `0x79F450` 为例：
+
+```asm
+0079F46D  call 0xFA6E60              ; 取一个全局管理器（返回 rax）
+0079F474  mov  dword ptr [rsp+0x20], 0x2D
+0079F48C  lea  edx, [rdi+0x58]       ; 分配大小 = 0x58
+0079F48F  call qword ptr [r9+0x28]   ; 管理器虚表槽 0x28 = 分配器
+0079F49F  movss [rax+0x28], xmm6     ; 参数 A（xmm1 传入）
+0079F4A4  movss [rax+0x2c], xmm6     ; 参数 B
+0079F4AE  mov  [rax+8], rcx          ; obj+8 = char+0x168（属主引用）
+0079F4B2  lea  rcx, [rip+0xA08DC7]   ; 虚表 = AddStateObjectDamageRate
+0079F4B9  mov  qword ptr [rax+0x10], 0x1E   ; 状态 ID
+0079F4DA  mov  qword ptr [rax+0x30], 0x3F800000  ; 默认 1.0f
+0079F4D3  mov  dword ptr [rax+0x24], -1          ; 默认 -1
+```
+
+对象布局（实测）：`+0x08` 属主引用、`+0x10` 状态 ID、`+0x24` = `r9d`、`+0x28/+0x2C` 参数 float、
+`+0x30` 1.0f、`+0x50` 是虚表 slot 1 的 setter 写入点。Armor 的尺寸是 0x50（无参数）。
+
+**参数生效路径（DamageRate，虚表 slot 6 = `0x7A8C30`）**：
+
+```asm
+movss xmm0, [rdx+0x24]
+mulss xmm0, [rcx+0x50]     ; 伤害 × 状态参数  → 0.96 就是"承受伤害 -4%"
+```
+
+### 4.51.5 一个被纠正的猜测（写下来免得下次再踩）
+
+`0x2F2D038` 处那张 12 字节一条、每条都是"两个相邻代码地址 + 一个 0x16xxxx 值"的表，
+我一开始以为是"状态工场表"。**它是 `.pdata`（RUNTIME_FUNCTION：begin/end/unwind）**，
+不是工场。状态对象没有集中工场：每个增益在自己的调用点构造 + 施加。
+
+### 4.51.6 还没查清的三件事（决定实现方案是否安全）
+
+1. **时长怎么表达**：`r9d` 写进 `[obj+0x24]`，实测调用点传的都是 `-1`（构造函数默认也是 -1），
+   所以 -1 更像是"不自动过期"。真正的计时器要么在别的字段、要么由"施加者"另外管理。
+   → 不查清就只能**自己计时 + 到期调用移除路径**（`0x7A25C0`），这也是可接受的方案。
+2. **能不能从 MOD 的线程调用引擎函数**：`0x7A2890` 会调虚函数、会动角色的状态链表。
+   MOD 目前**只写数值字段**，从不调用游戏代码；而 VEH 里跑在游戏线程上但处于"任意游戏逻辑中间"，
+   重入风险是真实存在的。这一条需要单独设计（候选：VEH 只记请求，由受控时机执行）
+   并配崩溃取证（`tools\analyze_dump.py`）。
+3. **有没有"按增益数据 ID 施加"的高层入口**：调用点里 `edx` 传 1 / 0x16 / 0x34 / 0x45 这类值，
+   看着像"增益定义 ID"而非状态 ID（状态 ID 已烧在对象里）。若有高层入口，
+   传参会更简单、也更少踩引擎假设。
+
+---
+
 ## 5.1 伤害管线节点族（新发现，下一阶段的主要猎场）
 
 `0x120CF90` 表里存在完整的碰撞/伤害管线节点，说明「命中 → 判定是否被格挡 → 扣精 → 反应」这条链在
