@@ -852,6 +852,9 @@ static LONG g_cancel_log = 0;
 static LONG g_cancel_count = 0, g_cancel_skipped = 0;
 static void apply_attack_cancel(void);
 static int read_action_id(void *player);
+static void report_cancel_skipped(const char *why, unsigned short pad,
+                                 int attack_down, unsigned long long at_press);
+static PgCancelGate g_cancel_gate;
 // Follow-up: what the action became shortly after a cancel. Advancing the motion
 // frame only *ends* the action; whether the character then actually guards is the
 // engine's decision (it depends on whether the engine buffered the press), and that
@@ -901,21 +904,20 @@ static void poll_guard_button(void) {
 
     unsigned long long at_press = now_ms();
     // Track the attack buttons' own edges: the cancel test needs to know whether an
-    // attack press happened *together* with the guard press (a combination) and
-    // whether one happened recently enough that the player is mid-attack.
+    // attack press happened *together* with the guard press (a combination), and it
+    // also needs to notice one that arrives a few ms *after* it -- that is how a
+    // martial skill (guard+attack, or an attack derived into one) is usually entered.
     int attack_down = ((buttons & (unsigned short)g_cfg.attack_button_mask) != 0);
-    pg_guard_update(&g_attack_in, attack_down, at_press);
+    int attack_fresh = pg_guard_update(&g_attack_in, attack_down, at_press);
     if (pg_guard_update(&g_guard_in, down, at_press)) {
         if (g_blocks < 60) {
             log_line("GUARD pressed (pad=0x%04X mask=0x%04X key=0x%02X key_down=%d)",
                      buttons, mask, g_cfg.guard_key_vk, key_down);
         }
         InterlockedIncrement(&g_guard_presses);   // display/diagnostic mirror only
-        // A pure guard press: cancel whatever the character is doing. This has
-        // nothing to do with the perfect-guard window -- the requirement is that
-        // *any* guard press (perfect block, normal block, no block at all) takes
-        // over immediately, so the only tests here are the combination test and
-        // the optional "must have attacked recently" gate (off by default).
+        // A guard press, with no attack button seen in the window *before* it. It is
+        // not a cancel yet: the gate waits a moment to see whether an attack press
+        // follows (a skill input), and only then writes anything.
         if (g_cfg.cancel_attack_on_guard) {
             int alone = pg_guard_alone(1, &g_attack_in, at_press, g_cfg.combo_guard_ms,
                                        g_cfg.cancel_attack_strict_hold);
@@ -926,23 +928,27 @@ static void poll_guard_button(void) {
                               (unsigned long long)g_cfg.cancel_attack_recent_ms);
             }
             if (alone && recent) {
-                apply_attack_cancel();
+                pg_cancel_gate_arm(&g_cancel_gate, at_press);
             } else {
-                InterlockedIncrement(&g_cancel_skipped);
-                if (g_cancel_log < 40) {
-                    // The current action id is included so the log can prove *what*
-                    // was running when the press was refused -- e.g. that a guard+X
-                    // martial-skill input did not disturb the attack in progress.
-                    void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
-                    log_line("ATTACK CANCEL skipped: %s (action=%d pad=0x%04X "
-                             "attack_down=%d last attack press %llums ago)",
-                             alone ? "no attack started recently" : "guard+attack combination",
-                             pl ? read_action_id((void *)pl) : -1, buttons, attack_down,
-                             g_attack_in.press_ms ? at_press - g_attack_in.press_ms : 0);
-                    g_cancel_log++;
-                }
+                report_cancel_skipped(alone ? "no attack started recently"
+                                            : "guard+attack combination",
+                                      buttons, attack_down, at_press);
             }
         }
+    }
+    // Resolve a pending cancel: an attack press inside the window means the engine
+    // keeps the input (skill / derivation preserved) and we write nothing.
+    if (g_cfg.cancel_attack_on_guard) {
+        int res = pg_cancel_gate_step(&g_cancel_gate, attack_fresh, now_ms(),
+                                      g_cfg.combo_guard_ms);
+        if (res == PG_CANCEL_FIRE) {
+            apply_attack_cancel();
+        } else if (res == PG_CANCEL_DROP) {
+            report_cancel_skipped("guard+attack combination", buttons, attack_down,
+                                  at_press);
+        }
+    } else if (g_cancel_gate.pending) {
+        pg_cancel_gate_reset(&g_cancel_gate);
     }
     g_last_buttons = buttons;
 
@@ -1844,9 +1850,25 @@ static void apply_attack_cancel(void) {
     }
 }
 
+// Log one refusal, with the evidence needed to tell the two cases apart later: which
+// action was running, what the pad word was, and how long ago the attack button went
+// down. The action id matters most -- it is how "the skill input did not disturb the
+// attack in progress" becomes checkable from a log instead of an opinion.
+static void report_cancel_skipped(const char *why, unsigned short pad, int attack_down,
+                                 unsigned long long at_press) {
+    InterlockedIncrement(&g_cancel_skipped);
+    if (g_cancel_log >= 40) return;
+    void *pl = g_base ? *(void **)(ULONG_PTR)(g_base + 0x18A0490) : NULL;
+    log_line("ATTACK CANCEL skipped: %s (action=%d pad=0x%04X attack_down=%d "
+             "last attack press %llums ago)",
+             why, pl ? read_action_id(pl) : -1, pad, attack_down,
+             g_attack_in.press_ms && at_press >= g_attack_in.press_ms
+                 ? at_press - g_attack_in.press_ms : 0);
+    g_cancel_log++;
+}
+
 // Reads the current action id (Refer::ActionId), or -1.
-static int read_action_id(void *player) {
-    int action = -1;
+static int read_action_id(void *player) {    int action = -1;
     unsigned long long p1 = 0, p2 = 0, p3 = 0;
     SIZE_T got = 0;
     if (ReadProcessMemory(GetCurrentProcess(), (char *)player + 0x230, &p1, 8, &got) && p1)

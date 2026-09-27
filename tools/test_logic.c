@@ -681,6 +681,50 @@ static void test_guard_alone(void) {
           "an attack press well after the guard press is a separate action, not a skill");
 }
 
+static void test_cancel_gate(void) {
+    printf("cancel gate (guard press vs martial-skill input)\n");
+    PgCancelGate g;
+    pg_cancel_gate_init(&g);
+    CHECK(pg_cancel_gate_step(&g, 0, 1000, 100) == PG_CANCEL_IDLE,
+          "a gate that was never armed does nothing");
+
+    // attack-button-first: the combination is already visible at the guard press, so
+    // the gate must be dropped on the very first step and nothing is written
+    pg_cancel_gate_arm(&g, 1000);
+    CHECK(pg_cancel_gate_step(&g, 1, 1000, 100) == PG_CANCEL_DROP,
+          "an attack press inside the window drops the gate");
+    CHECK(pg_cancel_gate_step(&g, 0, 1200, 100) == PG_CANCEL_IDLE,
+          "and it stays dropped (no late fire)");
+
+    // guard-first: this is the case the old wiring got wrong -- the attack button
+    // arrives 50ms *after* the guard press, which is a martial-skill input
+    pg_cancel_gate_arm(&g, 1000);
+    CHECK(pg_cancel_gate_step(&g, 0, 1016, 100) == PG_CANCEL_WAIT, "16ms: still waiting");
+    CHECK(pg_cancel_gate_step(&g, 0, 1048, 100) == PG_CANCEL_WAIT, "48ms: still waiting");
+    CHECK(pg_cancel_gate_step(&g, 1, 1050, 100) == PG_CANCEL_DROP,
+          "the attack press 50ms later still drops it -> the skill input survives");
+    CHECK(pg_cancel_gate_step(&g, 0, 1100, 100) == PG_CANCEL_IDLE, "nothing fires later");
+
+    // guard alone: nothing arrives, so it fires once, after the window
+    pg_cancel_gate_arm(&g, 1000);
+    CHECK(pg_cancel_gate_step(&g, 0, 1099, 100) == PG_CANCEL_WAIT, "1ms before the deadline");
+    CHECK(pg_cancel_gate_step(&g, 0, 1100, 100) == PG_CANCEL_FIRE, "fires at the deadline");
+    CHECK(pg_cancel_gate_step(&g, 0, 1200, 100) == PG_CANCEL_IDLE, "fires exactly once");
+
+    // window 0 = no buffering: fire on the next step (the pre-gate behaviour)
+    pg_cancel_gate_arm(&g, 1000);
+    CHECK(pg_cancel_gate_step(&g, 0, 1000, 0) == PG_CANCEL_FIRE, "window 0 fires at once");
+    // a re-arm while pending just moves the deadline
+    pg_cancel_gate_arm(&g, 1000);
+    pg_cancel_gate_arm(&g, 1050);
+    CHECK(pg_cancel_gate_step(&g, 0, 1100, 100) == PG_CANCEL_WAIT, "re-arm moved the deadline");
+    CHECK(pg_cancel_gate_step(&g, 0, 1150, 100) == PG_CANCEL_FIRE, "and it fires from there");
+    // explicit reset (e.g. the operator turned the feature off mid-wait)
+    pg_cancel_gate_arm(&g, 1000);
+    pg_cancel_gate_reset(&g);
+    CHECK(pg_cancel_gate_step(&g, 0, 1200, 100) == PG_CANCEL_IDLE, "reset cancels the wait");
+}
+
 int main(int argc, char **argv) {
     // --digest prints the shared logic's numeric fingerprint, for comparison with
     // the value the shipped DLL exports. See tools/test_logic_digest.py.
@@ -699,6 +743,7 @@ int main(int argc, char **argv) {
     test_hp_restore();
     test_buff();
     test_guard_alone();
+    test_cancel_gate();
     test_throttle();
     test_kiv();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
