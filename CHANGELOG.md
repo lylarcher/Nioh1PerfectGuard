@@ -9,15 +9,15 @@
 ## 一、包内文件
 
 ```
-Nioh1PerfectGuard.dll       MOD 本体（约 220 KB）
+Nioh1PerfectGuard.dll       MOD 本体（约 224 KB）
 Nioh1PerfectGuard.ini       配置（支持游戏内热更新，改完约 1 秒生效）
 Sounds\parry.wav            精防音效（16-bit PCM / 44.1kHz）
 QUICKSTART.md               ★ 一页说明：只看这一页也能装上并用起来
 README_CN.md / README_EN.md 完整使用说明（含音效排查表、手柄布局、事件源说明）
 ACCEPTANCE_TEST.md          实机验收步骤（照着做一遍即可）
 CHANGELOG.md                本文件
-source\Nioh1PerfectGuard.c  完整源码（约 2100 行，可查阅 MOD 到底改了什么）
-source\pg_logic.h           纯逻辑单一来源（窗口 / 精力补回 / 事件源判定 / 去重）
+source\Nioh1PerfectGuard.c  完整源码（约 2500 行，可查阅 MOD 到底改了什么）
+source\pg_logic.h           纯逻辑单一来源（窗口 / 精力补回 / 精防回血 / 事件源判定 / 去重）
 SHA256SUMS.txt              校验和
 ```
 
@@ -57,6 +57,27 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 `BlockEventSource=2`（默认）会自动在两种事件源之间选择：先用扣精点，
 若它从未触发而旗标点已看到 3 次玩家格挡，就自动切换并**在日志里说明**。
 
+### 2.0b 精防回血（本轮新增，你点名要的功能）
+
+精防成功时回复**玩家自己的体力（HP）**，字段就是源码里 HP 的那一对
+（`[[char+0x240]+0x18]` 上限 / `+0x20` 当前），也就是 `LAYOUT` 每行打印、
+以及对敌 HP 伤害已经在写的那一对。
+
+- **默认按百分比：每次精防回最大 HP 的 3%**（`HpRecoveryMode=1`，`HpRestorePercent=3`）。
+  880 上限 → 每次 +26（向下取整）。
+- 也支持**固定值**：`HpRecoveryMode=2` 时用 `HpRestoreFixed=50`；
+  `HpRecoveryMode=3` 则是"百分比 + 固定值"一起加。`0` 关闭。
+- **不越界**：回复量永远不超过上限（截断时会打 `, at max`）；**满血不写内存**
+  （这不是错误，是最常见的情况，只累加计数）；**HP 为 0 时绝不复活**。
+- **字段不像 HP 就拒绝写入**并打 `WARNING`，而不是往一个动过的偏移里塞数字。
+- 两种事件源都生效：它读的是游戏自己的玩家指针，不从命中上下文猜目标，
+  所以调用点放在两条路径共用的 `perfect_guard_rewards()` 里。
+- 判定与边界（21 条新断言）在 `source\pg_logic.h` 的 `pg_hp_restore()`，
+  离线可跑 —— 含"3% of 880 = 26""超出上限截断""0 HP 不救""偏移离谱拒写"。
+
+看日志：每 30 次以内打一行 `HP restore 前 -> 后 (+增量) max=.. mode=..`；
+累计值在 `STATE` 行尾（`hp_restores= / hp_total= / hp_full=`，`hp_full` 是满血次数）。
+
 ### 2.1 你在包内就能自己核对的
 
 | 做法 | 看什么 |
@@ -79,9 +100,9 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
 | 锚点期望字节与解密镜像逐字节一致 | `python tools\test_anchors.py ..` | **4/4 一致**；输入槽推导得 `0x1B78658`，与独立已知值相符 |
-| 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **113 条断言全过** |
+| 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **134 条断言全过** |
 | INI 编码与取值边界 + **内置默认值必须等于随包 INI** | `python tools\test_ini_encodings.py ..\mod` | **6/6** |
-| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **32/32 标记；94 条日志 0 条未解释** |
+| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **35/35 标记；96 条日志 0 条未解释** |
 | 交付文档只引用真实存在的文件 | `python tools\test_doc_paths.py ..` | 通过 |
 | 导出表 | `python tools\list_exports.py ..\mod\Nioh1PerfectGuard.dll` | 12 个 `PG_*` |
 | **测试过的算术 == 发货的算术** | `python tools\test_logic_digest.py ..` | 两个构建的数值指纹一致 |
@@ -140,17 +161,18 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 
 ---
 
-## 四、还需要你实机确认的（只有 4 项）
+## 四、还需要你实机确认的（5 项，其中 3 号已有你那局的日志佐证）
 
-这 4 项**静态分析已经做到头了**，必须真的打一场才知道。请按
-`ACCEPTANCE_TEST.md` 走一遍，然后把日志整个发回即可：
+剩下这些**静态分析已经做到头了**，必须真的打一场才知道。请按
+`ACCEPTANCE_TEST.md` 走一遍，然后把日志整个发回：
 
 | # | 待确认 | 日志里看什么 |
 | --- | --- | --- |
 | 1 | 格挡耗精到底改的是哪个字段 | `KIV block #n charge D=.. visible loss L=.. -> 结论`（**自动给出结论，不用你算**） |
 | 2 | 后摇取消是否真的生效 | `RECOVERY cancel: motion frame X -> Y`（需 `CancelRecovery=1`） |
-| 3 | 对敌削精 / HP 是否生效 | `ENEMY ki damage ..` / `ENEMY hp damage ..`（需先把 INI 值调非 0） |
+| 3 | 对敌削精 / HP 是否生效 | ✅ **你那局（9/27 12:41 的 `Nioh1PerfectGuard.gameplay.log`）里已经出现了**：`ENEMY ki damage 70 -> 20`、`ENEMY hp damage 900 -> 850` —— 说明写入路径与范围闸门都按预期工作。**还差一步**：肉眼确认敌人的精力条 / 血条真的动了 |
 | 4 | 你的防御键实际是哪个 | `LEARN key VK=0x..`（`LearnButtons=1` 标定；若用手柄则是 `LEARN pad bit N`） |
+| 5 | **精防回血（本轮新增）** | `HP restore 前 -> 后 (+增量) max=.. mode=..`（**先掉点血再看**，满血时这一行不会出现，只累加 `hp_full` 计数） |
 
 顺带留意：`PERFECT GUARD` 与 `GUARD pressed` 的次数关系（验证窗口是否合适）、
 以及**第 4 号场景**——故意让敌人格挡你的攻击，应当只出现
@@ -189,6 +211,7 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 | --- | --- | --- |
 | 锚点用「唯一 AOB 字节串 + 掩码，匹配数必须为 1」 | 用**固定 RVA + 期望字节校验**，不匹配就拒绝安装 | 仁王1 已停止更新，RVA 不会漂移；AOB 扫描要在 1800 万字节的 `.text` 里找，收益低而误匹配风险更高。**代价**：这个 MOD 只适用于 1.24.8，换版本的构建会被拒绝而不是勉强适配（这是刻意的安全取向） |
 | "两次独立启动都命中同一 RVA" 的锚点验收 | ✅ 已在**十余次**独立启动中稳定命中同一 RVA | 超出计划要求 |
+| （方案里**没有**这一项） | ✅ **精防回血**已实现并默认开启（3% 上限 HP） | 这是后来你**另外点名要求**的功能，不在最初批准的方案里，所以单列一行说明，而不是混进"已按计划交付" |
 | 受击反应触发（轻重冲击档位） | ❌ **未实现** | 方案里本身就标注为「⚠️ 待定」，因为反应 ID（18/4/1）是仁王2 的，需要重新标定。标定必须靠实机观察，本轮没有条件做 |
 | 视觉特效 | ❌ **已砍掉** | 方案里标注为可选（"找不到就砍"），且你在确认时选择了「先砍掉，只保留音效反馈」 |
 | 阶段3 验收：日志判定与游戏内实际表现一致（逆波场景交叉验证） | ⏳ **待实机** | 需要你实际游玩；这正是下方第四节那 4 项 |

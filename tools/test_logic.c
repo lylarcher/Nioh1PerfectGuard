@@ -473,6 +473,68 @@ static void test_dedupe(void) {
     CHECK(pg_dedupe_ok(9000, 8000, 250) == 1, "a backwards clock does not block");
 }
 
+static void test_hp_restore(void) {
+    printf("hp restore\n");
+    // The requested defaults: 3% of maximum HP, and a flat 50 when that mode is
+    // chosen. 3% of 880 = 26.4 -> 26 (truncated, not rounded up).
+    PgHpResult r = pg_hp_restore(550, 880, PG_HP_PERCENT, 3.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_APPLIED, "3%% of max must apply");
+    CHECK(r.amount == 26, "3%% of 880 must be 26 HP, got %d", r.amount);
+    CHECK(r.after == 576, "550 + 26 must be 576, got %d", r.after);
+    CHECK(r.clamped == 0, "no clamp when there is room");
+
+    r = pg_hp_restore(550, 880, PG_HP_FIXED, 3.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_APPLIED && r.amount == 50, "fixed 50 must apply");
+    CHECK(r.after == 600, "550 + 50 must be 600, got %d", r.after);
+
+    r = pg_hp_restore(550, 880, PG_HP_PERCENT_AND_FIXED, 3.0f, 50.0f);
+    CHECK(r.amount == 76, "both modes add up: 26 + 50, got %d", r.amount);
+    CHECK(r.after == 626, "550 + 76 must be 626, got %d", r.after);
+
+    // Off is off, whatever the amounts say.
+    r = pg_hp_restore(550, 880, PG_HP_OFF, 3.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_DISABLED && r.amount == 0 && r.after == 550,
+          "mode 0 must not write");
+
+    // Never above maximum, and say that it was clamped.
+    r = pg_hp_restore(870, 880, PG_HP_FIXED, 3.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_APPLIED && r.after == 880 && r.amount == 10 && r.clamped == 1,
+          "a restore past max must clamp to max, got %d amount %d clamped %d",
+          r.after, r.amount, r.clamped);
+    r = pg_hp_restore(55, 100, PG_HP_PERCENT, 300.0f, 0.0f);
+    CHECK(r.after == 100 && r.amount == 45, "300%% must clamp too, got %d", r.after);
+
+    // Already full is normal, not an error: HP is full most of the time.
+    r = pg_hp_restore(880, 880, PG_HP_PERCENT, 3.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_FULL && r.after == 880, "full HP must be reported as full");
+
+    // Never revive, and never touch a field that does not look like HP.
+    r = pg_hp_restore(0, 880, PG_HP_PERCENT, 3.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_DEAD && r.amount == 0, "0 HP must never be healed");
+    r = pg_hp_restore(-5, 880, PG_HP_PERCENT, 3.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_INVALID, "negative current HP is invalid");
+    r = pg_hp_restore(50, 0, PG_HP_FIXED, 3.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_INVALID, "max HP of 0 is invalid");
+    r = pg_hp_restore(50, 100000001, PG_HP_FIXED, 3.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_INVALID, "an absurd maximum is refused");
+    r = pg_hp_restore(900, 880, PG_HP_FIXED, 3.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_INVALID, "current above maximum is refused");
+
+    // A configured amount that rounds to 0 HP must not be written (and must not
+    // be reported as a successful restore either).
+    r = pg_hp_restore(50, 100, PG_HP_PERCENT, 0.5f, 0.0f);
+    CHECK(r.outcome == PG_HP_NO_AMOUNT && r.amount == 0,
+          "0.5%% of 100 must round to 0 and not write");
+    r = pg_hp_restore(50, 100, PG_HP_PERCENT_AND_FIXED, 0.0f, 0.0f);
+    CHECK(r.outcome == PG_HP_NO_AMOUNT, "zero amounts must not write");
+
+    // A 1 HP maximum is the smallest real case worth pinning.
+    r = pg_hp_restore(0, 1, PG_HP_FIXED, 0.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_DEAD, "dead is dead even at 1 max HP");
+    r = pg_hp_restore(1, 1, PG_HP_FIXED, 0.0f, 50.0f);
+    CHECK(r.outcome == PG_HP_FULL, "1/1 is full");
+}
+
 int main(int argc, char **argv) {
     // --digest prints the shared logic's numeric fingerprint, for comparison with
     // the value the shipped DLL exports. See tools/test_logic_digest.py.
@@ -488,6 +550,7 @@ int main(int argc, char **argv) {
     test_dedupe();
     test_restore();
     test_attribution();
+    test_hp_restore();
     test_throttle();
     test_kiv();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);

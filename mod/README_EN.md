@@ -108,6 +108,9 @@ apply **within about a second** while the game is running.
 | `KiTopUp` | 1 | Also top the visible Ki field back up — see "two reduction mechanisms" below. **Leave at 1** |
 | `KiRecoveryMode` | 3 | 0 none / 1 refund cost / 2 fixed / **3 one sixth of max Ki** |
 | `FixedRecovery` | 50 | Used by mode 2 |
+| `HpRecoveryMode` | 1 | **HP restore on a perfect guard**: 0 off / **1 percent of max HP (default)** / 2 fixed / 3 both |
+| `HpRestorePercent` | 3 | Percent of maximum HP per perfect guard (truncated: 3% of 880 = 26) |
+| `HpRestoreFixed` | 50 | Flat HP per perfect guard, used by mode 2 or 3 |
 | `BlockEventSource` | 2 | **Which event means the player blocked**: `2` auto (recommended) / `0` guard-cost site only / `1` guard-flag site only |
 | `DiagDisable` | 0 | Diagnostic bitmask, keep at 0: `1` no breakpoints / `2` no input thread / `4` enable the rolling re-arm (**known to crash the game**) / `8` skip the self-test |
 | `EnemyKiDamage` | 0 | Ki damage to the attacker (`[[char+0x240]+0x40]`) |

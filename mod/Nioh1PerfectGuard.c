@@ -112,6 +112,12 @@ typedef struct {
     int ki_topup;                  // 1 = also top the visible Ki field back up
     int ki_recovery_mode;          // 0 none, 1 refund the guard cost, 2 fixed
     float fixed_recovery;
+    // Restoring the player's own HP (the "体力" reward). Modes mirror the Ki ones
+    // but the amounts are integral HP, so the pure decision lives in pg_logic.h
+    // (pg_hp_restore) where the clamping and refusal rules are unit tested.
+    int hp_recovery_mode;          // 0 off, 1 percent of max, 2 fixed, 3 both
+    float hp_restore_percent;      // percent of maximum HP
+    float hp_restore_fixed;        // flat HP
     // gate
     int gate_timely;               // 0 = every block counts, 1 = require a fresh press
     int guard_button_mask;         // XInput button bit; LB/L1 = 0x0100
@@ -165,6 +171,12 @@ static void config_defaults(Config *c) {
     c->ki_topup = 1;               // also write the visible Ki field (see the INI)
     c->ki_recovery_mode = 3;       // Balanced: one sixth of maximum Ki
     c->fixed_recovery = 50.0f;
+    // HP restore is on by default because it was asked for as a default: 3% of
+    // maximum HP per perfect guard. HpRestoreFixed is the flat alternative (50)
+    // and is only used by mode 2 or 3, so the shipped default heals 3%, not 53.
+    c->hp_recovery_mode = 1;       // 1 = percent of maximum
+    c->hp_restore_percent = 3.0f;
+    c->hp_restore_fixed = 50.0f;
     // These must match the values shipped in Nioh1PerfectGuard.ini: if the INI is
     // missing or unreadable the mod runs on these, and a gate_timely of 0 would
     // silently turn *every* block into a perfect guard.
@@ -333,6 +345,11 @@ static int config_load_inner(int first_time) {
     c.ki_topup = ini_int("KiTopUp", c.ki_topup, 0, 1, &ok);
     c.ki_recovery_mode = ini_int("KiRecoveryMode", c.ki_recovery_mode, 0, 3, &ok);
     c.fixed_recovery = ini_float("FixedRecovery", c.fixed_recovery, 0.0f, 100000.0f, &ok);
+    c.hp_recovery_mode = ini_int("HpRecoveryMode", c.hp_recovery_mode, 0, 3, &ok);
+    c.hp_restore_percent = ini_float("HpRestorePercent", c.hp_restore_percent,
+                                     0.0f, 1000.0f, &ok);
+    c.hp_restore_fixed = ini_float("HpRestoreFixed", c.hp_restore_fixed,
+                                   0.0f, 100000.0f, &ok);
     c.gate_timely = ini_int("RequireTimelyGuard", c.gate_timely, 0, 1, &ok);
     c.guard_button_mask = ini_int("GuardButtonMask", c.guard_button_mask, 1, 0xFFFF, &ok);
     c.pad_slot = ini_int("PadSlot", c.pad_slot, 0, 3, &ok);
@@ -364,10 +381,13 @@ static int config_load_inner(int first_time) {
     g_cfg = c;
     if (!first_time) {
         log_line("CONFIG reloaded: enabled=%d window=%dms reduction=%d%% topup=%d "
-                 "recovery=%d gate_timely=%d sound=%d vol=%.2f file=%s",
+                 "recovery=%d gate_timely=%d sound=%d vol=%.2f file=%s "
+                 "hpmode=%d hppct=%g hpfixed=%g",
                  c.enabled, c.window_ms, c.ki_reduction_percent, c.ki_topup,
                  c.ki_recovery_mode,
-                 c.gate_timely, c.sound_enabled, c.sound_volume, c.sound_file);
+                 c.gate_timely, c.sound_enabled, c.sound_volume, c.sound_file,
+                 c.hp_recovery_mode, (double)c.hp_restore_percent,
+                 (double)c.hp_restore_fixed);
     }
     g_cfg_loaded = 1;
     return 0;
@@ -1123,6 +1143,67 @@ static void on_guard_flag(int which, CONTEXT *c) {
     if (g_cfg.block_event_source != 0) on_guard_flag_event(c);
 }
 
+// The HP half of the reward.
+//
+// It reads the player object from the game's own global rather than from the hit
+// context, so it cannot accidentally heal whoever else is in the context -- and
+// it therefore works identically from both event sources, which is why the call
+// site is perfect_guard_rewards() instead of either handler.
+//
+// The decision (clamping, the refusals, the "0 HP means dead") is in
+// pg_hp_restore(); this wrapper only does the memory access, the counters and the
+// logging.
+static volatile LONG g_hp_restores = 0;   // times HP was actually written
+static volatile LONG g_hp_restored = 0;   // total HP handed back
+static volatile LONG g_hp_skipped = 0;    // full HP: normal, not reported per event
+static LONG g_hp_log = 0;
+static int g_hp_bad_notice = 0;
+
+static void apply_hp_restore(void) {
+    if (g_cfg.hp_recovery_mode == PG_HP_OFF) return;
+    void *player = g_base ? *(void **)(ULONG_PTR)(g_base + 0x18A0490) : NULL;
+    if (!player) return;
+    void *param = *(void **)((char *)player + 0x240);
+    if (!param) return;
+
+    int *cur = (int *)((char *)param + 0x20);
+    int *max = (int *)((char *)param + 0x18);
+    PgHpResult r = pg_hp_restore(*cur, *max, g_cfg.hp_recovery_mode,
+                                 g_cfg.hp_restore_percent, g_cfg.hp_restore_fixed);
+    if (r.outcome == PG_HP_FULL) {
+        // The common case by far. Counting it is what makes "the setting does
+        // nothing" distinguishable from "HP happened to be full every time".
+        InterlockedIncrement(&g_hp_skipped);
+        return;
+    }
+    if (r.outcome != PG_HP_APPLIED) {
+        // Either the offsets moved or the configured amount is 0 HP. Both look
+        // exactly like a broken setting from the player's side, so say which.
+        if (g_hp_bad_notice < 3) {
+            log_line("WARNING: HpRecoveryMode=%d applied no HP restore (%s). "
+                     "Current/max HP read %d/%d; check HpRestorePercent=%g and "
+                     "HpRestoreFixed=%g in the INI.",
+                     g_cfg.hp_recovery_mode,
+                     r.outcome == PG_HP_INVALID ? "the HP fields do not look like HP"
+                                                : "the configured amount is 0 HP",
+                     r.before, *max, (double)g_cfg.hp_restore_percent,
+                     (double)g_cfg.hp_restore_fixed);
+            g_hp_bad_notice++;
+        }
+        return;
+    }
+
+    *cur = r.after;
+    InterlockedIncrement(&g_hp_restores);
+    InterlockedExchangeAdd(&g_hp_restored, r.amount);
+    if (g_hp_log < 30) {
+        log_line("HP restore %d -> %d (+%d%s) max=%d mode=%d",
+                 r.before, r.after, r.amount, r.clamped ? ", at max" : "",
+                 *max, g_cfg.hp_recovery_mode);
+        g_hp_log++;
+    }
+}
+
 static void perfect_guard_rewards(void) {
     InterlockedIncrement(&g_perfect);
     if (g_perfect <= 60) {
@@ -1136,6 +1217,7 @@ static void perfect_guard_rewards(void) {
 
     void *player_now = g_base ? *(void **)(ULONG_PTR)(g_base + 0x18A0490) : NULL;
     ki_snapshot();
+    apply_hp_restore();
     apply_cancel_recovery(player_now);
 
     // One-shot layout diagnostic: the engine's Refer::* getters read these exact
@@ -1531,10 +1613,13 @@ static void dump_state(const char *why) {
 
     log_line("STATE (%s) version=%s", why, MOD_VERSION);
     log_line("STATE anchors=%d/%d installed=%d mask=0x%04X slot=%d vk=%d "
-             "gate=%d window=%dms reduction=%d%% recovery=%d",
+             "gate=%d window=%dms reduction=%d%% recovery=%d hpmode=%d hppct=%g "
+             "hpfixed=%g",
              anchors_ok, g_anchor_count, g_installed, g_cfg.guard_button_mask,
              g_cfg.pad_slot, g_cfg.guard_key_vk, g_cfg.gate_timely,
-             g_cfg.window_ms, g_cfg.ki_reduction_percent, g_cfg.ki_recovery_mode);
+             g_cfg.window_ms, g_cfg.ki_reduction_percent, g_cfg.ki_recovery_mode,
+             g_cfg.hp_recovery_mode, (double)g_cfg.hp_restore_percent,
+             (double)g_cfg.hp_restore_fixed);
     log_line("STATE input slot=0x%llX mgr=0x%llX pad=0x%04X conn=[%u,%u,%u,%u] "
              "guard_down=%d presses=%ld lt=%u rt=%u",
              g_input_mgr_slot, (unsigned long long)mgr, padword, flags[0], flags[1],
@@ -1545,11 +1630,15 @@ static void dump_state(const char *why) {
              (unsigned long long)player, (unsigned long long)param, hp, maxhp,
              ki, maxki, eflag, ecur, ecost, mframe, action);
     log_line("STATE ctx=0x%llX charA=0x%llX charB=0x%llX | blocks=%ld perfect=%ld "
-             "rewards=%ld freeguards=%ld rearmed=%ld purged=%ld",
+             "rewards=%ld freeguards=%ld rearmed=%ld purged=%ld | hp_restores=%ld "
+             "hp_total=%ld hp_full=%ld",
              (unsigned long long)ctx, (unsigned long long)ca, (unsigned long long)cb,
              g_blocks, g_perfect, g_rewards, g_free,
              InterlockedCompareExchange(&g_rearm_writes, 0, 0),
-             InterlockedCompareExchange(&g_purged_total, 0, 0));
+             InterlockedCompareExchange(&g_purged_total, 0, 0),
+             InterlockedCompareExchange(&g_hp_restores, 0, 0),
+             InterlockedCompareExchange(&g_hp_restored, 0, 0),
+             InterlockedCompareExchange(&g_hp_skipped, 0, 0));
 }
 
 // Called from the worker loop: fire the automatic dump once a player exists.
@@ -2344,7 +2433,7 @@ __declspec(dllexport) const char *PG_SelfTest(void) {
              "reduction=%d topup=%d recovery=%d fixed=%g gate=%d mask=0x%04X "
              "padslot=%d vk=%d learn=%d trace=%d enemyki=%g enemyhp=%g "
              "sound_enabled=%d vol=%.2f file=%s hotkey=%d diag=%d eventsrc=%d "
-             "| wav=%d audio=%d",
+             "hpmode=%d hppct=%g hpfixed=%g | wav=%d audio=%d",
              rc, g_cfg.enabled, g_cfg.window_ms, g_cfg.cancel_recovery,
              (double)g_cfg.cancel_recovery_frames, g_cfg.ki_reduction_percent,
              g_cfg.ki_topup, g_cfg.ki_recovery_mode, (double)g_cfg.fixed_recovery,
@@ -2353,7 +2442,8 @@ __declspec(dllexport) const char *PG_SelfTest(void) {
              (double)g_cfg.enemy_ki_damage, (double)g_cfg.enemy_hp_damage,
              g_cfg.sound_enabled, g_cfg.sound_volume, g_cfg.sound_file,
              g_cfg.diagnostic_hotkey, g_cfg.diag_disable, g_cfg.block_event_source,
-             w, a);
+             g_cfg.hp_recovery_mode, (double)g_cfg.hp_restore_percent,
+             (double)g_cfg.hp_restore_fixed, w, a);
 
     g_cfg = saved_cfg;
     g_cfg_loaded = saved_loaded;

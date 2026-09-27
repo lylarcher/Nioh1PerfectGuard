@@ -127,6 +127,9 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `KiTopUp` | 1 | 是否额外把可见精力**补回**。见下方「两条减免机制」——**一般保持 1** |
 | `KiRecoveryMode` | 3 | 0 不回精 / 1 返还本次消耗 / 2 固定值 / **3 回复最大精力的 1/6** |
 | `FixedRecovery` | 50 | 模式 2 使用的固定回精量 |
+| `HpRecoveryMode` | 1 | **精防回血**：0 关 / **1 按最大 HP 百分比（默认）** / 2 固定值 / 3 两者相加 |
+| `HpRestorePercent` | 3 | 每次精防回复**最大 HP 的 3%**（向下取整：3% of 880 = 26） |
+| `HpRestoreFixed` | 50 | 模式 2 或 3 使用的固定回血量 |
 | `EnemyKiDamage` | 0 | 对敌削精（float，`[[char+0x240]+0x40]`） |
 | `EnemyHpDamage` | 0 | 对敌 HP（整数，`[[char+0x240]+0x20]`，可致死） |
 | `SoundEnabled` / `SoundVolume` / `SoundFile` | 1 / 1 / parry.wav | 精防提示音 |

@@ -4,7 +4,7 @@
 
 《仁王1 完全版》（1.24.8）的**精准防御（精防）** MOD：
 在被击中的**一瞬间**按下防御，就能触发精防并拿到收益
-（回精 / 格挡耗精减免 / 对敌削精与伤害 / 后摇取消 / 音效）。
+（回精 / 格挡耗精减免 / **回血** / 对敌削精与伤害 / 后摇取消 / 音效）。
 
 它**不改动任何游戏文件**，一个字节都不改 `.text`：用的是 CPU 的硬件执行断点 + 异常处理，
 只在断点命中时改内存里的几个数值字段。
@@ -49,6 +49,7 @@ STATUS ACTIVE anchors=4/4 ...
 
 1. **进关卡**（标题画面不会真正开始；不过它在演示模式里其实也会产生格挡事件）。
 2. 被打时**看准时机**按防御，做 5 次 → 日志应有 `PERFECT GUARD`。
+   **先掉点血再做**，还能看到 `HP restore`（默认每次回 3% 上限 HP）。
 3. **按住防御不放**挨打 → 应出现 `PLAYER BLOCK ... not within 250ms`，**不**发奖励。
 4. 打敌人让它格挡你 → 应出现 `GUARD (other) ... ignored`，**不**发奖励。
 5. 完整细节见 `ACCEPTANCE_TEST.md`。
@@ -61,6 +62,7 @@ STATUS ACTIVE anchors=4/4 ...
 | 键鼠玩家：防御键没反应 | `LearnButtons=1` → 按一下防御键 → 抄 `LEARN key VK=0x..` 到 `GuardKeyVK` → 改回 0 |
 | 觉得减免不够/过头 | `KiDamageReductionPercent`（默认 100 = 完全不耗精） |
 | 回精方式 | `KiRecoveryMode`（0 不回 / 1 返还本次 / 2 固定 / **3 最大精力 1/6**） |
+| **精防回血**（默认已开） | `HpRecoveryMode`（0 关 / **1 按最大 HP 百分比** / 2 固定 / 3 两者相加）；比例用 `HpRestorePercent`（默认 3 = 3%），固定值用 `HpRestoreFixed`（默认 50）。**满血时不写内存**，所以想看到 `HP restore` 得先掉点血 |
 | 想要对敌效果 | `EnemyKiDamage` / `EnemyHpDamage` 设成非 0（默认关闭，不写内存） |
 | 后摇取消（实验性） | `CancelRecovery=1` |
 | 音效 | `SoundEnabled` / `SoundVolume` / `SoundFile`（换成你自己的 16-bit PCM 44.1/48k WAV） |

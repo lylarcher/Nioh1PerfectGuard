@@ -141,6 +141,94 @@ static inline float pg_ki_step(PgKiRestore *s, float now_value,
 }
 
 // ---------------------------------------------------------------------------
+// Restoring the player's HP on a perfect guard.
+//
+// This is the only reward in the mod that heals, so the safety rules matter more
+// than the arithmetic:
+//
+//  * The field offsets are read, not inferred, and are sanity-gated before any
+//    write. Max HP is an int at param+0x18 and current HP at param+0x20 -- the
+//    same pair `LAYOUT` prints and the same pair the enemy effects write. A
+//    moved offset would otherwise let the mod write a plausible-looking number
+//    into whatever now lives there.
+//  * Never revive. A guard event while current HP is <= 0 is not a heal, it is
+//    the engine reporting a dead character; writing there could resurrect the
+//    player and desync the death that is already in flight.
+//  * Never exceed maximum, and never write when the amount rounds to zero: a
+//    "successful" restore of 0 HP would be logged as a reward that visibly did
+//    nothing.
+#define PG_HP_OFF 0                  // no HP restore at all
+#define PG_HP_PERCENT 1              // HpRestorePercent of maximum HP
+#define PG_HP_FIXED 2                // HpRestoreFixed, flat
+#define PG_HP_PERCENT_AND_FIXED 3    // both, added together
+
+typedef enum {
+    PG_HP_APPLIED = 0,      // write `after` to the current-HP field
+    PG_HP_DISABLED,         // HpRecoveryMode=0, or the configured amount is 0
+    PG_HP_FULL,             // already at maximum; nothing to do (normal, not an error)
+    PG_HP_INVALID,          // the HP pair does not look like HP -> refuse to write
+    PG_HP_DEAD,             // current HP <= 0: never revive
+    PG_HP_NO_AMOUNT         // the configured amount rounds to 0 whole HP
+} PgHpOutcome;
+
+typedef struct {
+    int before;
+    int after;        // the value to write (== before when not applied)
+    int amount;       // HP actually added (0 when not applied)
+    int clamped;      // the restore would have overshot maximum
+    PgHpOutcome outcome;
+} PgHpResult;
+
+// Upper bound on a believable maximum HP. Nioh 1 values are in the hundreds to
+// low thousands; this only has to be loose enough never to reject a real build
+// while still catching a pointer that now points at something else.
+#define PG_HP_MAX_SANE 100000000
+
+// Percent is truncated to whole HP (3% of 880 = 26, not 27). Truncation is the
+// conservative direction and keeps the behaviour explainable in the log.
+static inline PgHpResult pg_hp_restore(int cur, int max, int mode,
+                                       float percent, float fixed) {
+    PgHpResult r;
+    r.before = cur;
+    r.after = cur;
+    r.amount = 0;
+    r.clamped = 0;
+    r.outcome = PG_HP_APPLIED;
+
+    if (mode == PG_HP_OFF) { r.outcome = PG_HP_DISABLED; return r; }
+    if (max <= 0 || max > PG_HP_MAX_SANE || cur < 0 || cur > max) {
+        r.outcome = PG_HP_INVALID;
+        return r;
+    }
+    if (cur <= 0) { r.outcome = PG_HP_DEAD; return r; }
+    if (cur >= max) { r.outcome = PG_HP_FULL; return r; }
+
+    int add = 0;
+    if (mode == PG_HP_PERCENT || mode == PG_HP_PERCENT_AND_FIXED) {
+        if (percent > 0.0f) {
+            float p = (float)max * percent / 100.0f;
+            if (p > (float)PG_HP_MAX_SANE) p = (float)PG_HP_MAX_SANE;
+            if (p > 0.0f) add += (int)p;
+        }
+    }
+    if (mode == PG_HP_FIXED || mode == PG_HP_PERCENT_AND_FIXED) {
+        if (fixed > 0.0f) {
+            float f = fixed;
+            if (f > (float)PG_HP_MAX_SANE) f = (float)PG_HP_MAX_SANE;
+            add += (int)f;
+        }
+    }
+    if (add <= 0) { r.outcome = PG_HP_NO_AMOUNT; return r; }
+
+    int target = cur + add;                 // bounded: both sides <= PG_HP_MAX_SANE
+    if (target > max) { target = max; r.clamped = 1; }
+    r.amount = target - cur;
+    if (r.amount <= 0) { r.outcome = PG_HP_NO_AMOUNT; return r; }
+    r.after = target;
+    return r;
+}
+
+// ---------------------------------------------------------------------------
 // Diagnostic-stream throttle.
 //
 // A "log whenever the value changed" stream is only safe if the value changes
@@ -503,6 +591,27 @@ static inline unsigned int pg_logic_digest(void) {
     for (unsigned long long last = 0; last <= 4000; last += 1500)
         for (unsigned long long now = 0; now <= 4000; now += 500)
             h = pg_fold_bits(h, (unsigned)pg_dedupe_ok(last, now, 250));
+
+    // 8. HP restore across the modes, the clamping boundary and the refusal cases
+    {
+        const int curs[5] = {0, 1, 550, 880, 881};
+        const int maxs[3] = {0, 880, 100000001};
+        const float pcts[4] = {0.0f, 3.0f, 50.0f, 250.0f};
+        const float fixeds[3] = {0.0f, 50.0f, 100000.0f};
+        for (int mode = 0; mode <= 3; ++mode)
+            for (int ci = 0; ci < 5; ++ci)
+                for (int mi = 0; mi < 3; ++mi)
+                    for (int pi = 0; pi < 4; ++pi)
+                        for (int fi = 0; fi < 3; ++fi) {
+                            PgHpResult r = pg_hp_restore(curs[ci], maxs[mi], mode,
+                                                         pcts[pi], fixeds[fi]);
+                            h = pg_fold_bits(h, (unsigned)r.outcome);
+                            h = pg_fold_bits(h, (unsigned)r.before);
+                            h = pg_fold_bits(h, (unsigned)r.after);
+                            h = pg_fold_bits(h, (unsigned)r.amount);
+                            h = pg_fold_bits(h, (unsigned)r.clamped);
+                        }
+    }
 
     return h;
 }
