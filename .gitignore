@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# 仁王1 精防 MOD — 不入库的内容
+#
+# 原则：仓库只收「源码 / 工具 / 文档 / 交付物」。
+#      可再生成的、体积大的、以及运行期自动产生的文件一律排除。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 工具链：可重新下载，约 460 MB ────────────────────────────────────────────
+/_tools_dl/
+
+# ── 逆向分析产物：由 tools/dump_module.py + analyze.py 重新生成 ──────────────
+#    解密镜像（50 MB ×2）、交叉引用库（11 MB）、RTTI/函数/节点清单、探针产物
+/_work/*.raw.bin
+/_work/*.mem.exe
+/_work/*.pkl
+/_work/*.rtti.json
+/_work/*.funcs.txt
+/_work/*.nodes.tsv
+/_work/notepad.*
+/_work/*.exe
+/_work/*.dll
+/_work/*.lib
+/_work/*.out
+# 探针的实验子目录里也会留下编译产物，用递归模式一并排除
+_work/**/*.exe
+_work/**/*.dll
+_work/**/*.lib
+_work/**/*.pdb
+_work/**/*.out
+# 注意：_work 下的 .c / .ini / .log 小文件（probe.c、dr7test.c、probe.log …）
+#      是探针阶段的证据，保留。
+
+# ── 编译残留 ─────────────────────────────────────────────────────────────────
+*.pdb
+*.obj
+*.ilk
+*.exp
+*.lib
+.zig-cache/
+zig-out/
+__pycache__/
+*.pyc
+
+# ── 运行期自动生成：游戏跑起来才会出现，不是交付物 ───────────────────────────
+Nioh1PerfectGuard.gameplay.log
+Nioh1PerfectGuard.selftest.log
+Nioh1PerfectGuard.state
+*.dmp

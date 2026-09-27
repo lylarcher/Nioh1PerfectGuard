@@ -1,0 +1,134 @@
+"""Rehearse delivery: every file a shipped document names must be reachable.
+
+The package the user receives contains only the runtime files and the docs. A doc
+that tells them to run "tools\\test_logic.exe" or open "source\\foo.c" points at
+something that is not there, and they only find out when they try it.
+
+Telling a path from ordinary prose is the hard part: docs are full of things like
+`SOUND disabled: xaudio2_9.dll / XAudio2Create unavailable` and `0x0001/0002/...`
+that merely *look* path-ish. So this is self-calibrating -- a token counts as a
+file reference only if a file with that basename exists somewhere in the repo.
+Log-line examples and bit lists name no real file and are ignored automatically.
+
+Usage: python test_doc_paths.py <repo_root>
+"""
+import os
+import re
+import sys
+
+root = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
+pkg = os.path.join(root, "dist", "Nioh1PerfectGuard")
+
+SHIPPED_DOCS = {
+    "ACCEPTANCE_TEST.md": os.path.join(root, "验收测试说明.md"),
+    "CHANGELOG.md": os.path.join(root, "CHANGELOG.md"),
+    "README_CN.md": os.path.join(root, "mod", "README_CN.md"),
+    "README_EN.md": os.path.join(root, "mod", "README_EN.md"),
+    "QUICKSTART.md": os.path.join(root, "QUICKSTART.md"),
+}
+DOCS_DIR = os.path.join(root, "mod")
+
+# Prefixes that legitimately point outside the package: the development working
+# copy, or the user's own game install.
+DEV_PREFIX = re.compile(r"^(tools|mod|_work|source|src|dist)\\?", re.IGNORECASE)
+GAME_PREFIX = re.compile(r"^(mods|Savedata|Sounds)\\?", re.IGNORECASE)
+GAME_EXE = {"nioh.exe", "nioh_launcher.exe", "dinput8.dll", "steam_autocloud.vdf"}
+
+# Development documents that live in the working copy and are deliberately not
+# shipped (the plan, the reverse-engineering notebook, the probe write-up). A
+# release doc may cite them, but must say they are dev-side.
+DEV_DOCS = {"方案计划.md", "RE_NOTES.md", "探针会话说明.md"}
+
+# Files the mod or the game creates at run time; they exist only after a session.
+RUNTIME_SUFFIX = (".log",)
+
+
+def walk_files(base, skip=()):
+    names, full = set(), set()
+    for dirpath, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in skip]
+        for f in files:
+            p = os.path.join(dirpath, f)
+            names.add(f)
+            full.add(os.path.relpath(p, base).replace("/", "\\"))
+    return names, full
+
+
+PKG_BASENAMES, PKG_RELPATHS = walk_files(pkg)
+# The toolchain checkout contains thousands of unrelated files (Zig's own
+# libc/fmt test data), and words like "thread" or "format" would otherwise look
+# like file references. Only the project's own directories count.
+REPO_BASENAMES, _ = walk_files(
+    root, skip={".git", "node_modules", "_tools_dl", "_dl", "dist"})
+for extra in ("pg_logic.h", "Nioh1PerfectGuard.c", "Nioh1PerfectGuard.ini"):
+    REPO_BASENAMES.add(extra)
+
+print("package files (%d): %s" % (len(PKG_BASENAMES), ", ".join(sorted(PKG_BASENAMES))))
+print("files anywhere in the repo: %d basenames" % len(REPO_BASENAMES))
+
+fails, dev_refs, checked = [], {}, 0
+
+for doc, src in sorted(SHIPPED_DOCS.items()):
+    if not os.path.exists(src):
+        fails.append("document %s is missing (%s)" % (doc, src))
+        continue
+    text = open(src, encoding="utf-8").read()
+    print("\n--- %s ---" % doc)
+
+    # every whitespace-separated token inside a code span
+    tokens = set()
+    for span in re.findall(r"`([^`\n]+)`", text):
+        for tok in re.split(r"\s+", span.strip()):
+            tok = tok.strip(".,;:()[]\"'")
+            if tok:
+                tokens.add(tok)
+
+    hits = 0
+    for tok in sorted(tokens):
+        norm = tok.replace("/", "\\")
+        base = os.path.basename(norm)
+        if base not in REPO_BASENAMES:
+            continue                     # not a file reference at all
+        hits += 1
+        checked += 1
+        if base in PKG_BASENAMES or norm in PKG_RELPATHS:
+            print("    OK        %s" % tok)
+        elif base.endswith(RUNTIME_SUFFIX):
+            print("    runtime   %s  (created when the game runs)" % tok)
+        elif base in GAME_EXE or GAME_PREFIX.match(norm):
+            print("    game-side %s" % tok)
+        elif base in DEV_DOCS:
+            dev_refs.setdefault(doc, set()).add(tok)
+            print("    dev-doc   %s  (development document, not shipped)" % tok)
+        elif DEV_PREFIX.match(norm):
+            dev_refs.setdefault(doc, set()).add(tok)
+            print("    dev-side  %s" % tok)
+        else:
+            fails.append("%s names %s, which is not in the package" % (doc, tok))
+            print("    DANGLING  %s" % tok)
+    if not hits:
+        print("    (no file references)")
+
+if dev_refs:
+    print("\n--- references into the development tree ---")
+    for doc, toks in sorted(dev_refs.items()):
+        print("  %s: %s" % (doc, ", ".join(sorted(toks))))
+    print("  These are allowed only where the document says the file is dev-side.")
+
+# A doc shipped in the package must not tell the reader to run something that
+# ships only in the source tree without saying so. Derived from the references
+# actually found, so it cannot go stale.
+DISCLOSURE = ("开发目录", "开发工作目录", "开发工作", "development source tree",
+              "development working copy", "does not ship", "本包不含")
+for doc, toks in sorted(dev_refs.items()):
+    text = open(SHIPPED_DOCS[doc], encoding="utf-8").read()
+    if not any(phrase in text for phrase in DISCLOSURE):
+        fails.append("%s references the development tree (%s) but never says so"
+                     % (doc, ", ".join(sorted(toks))))
+
+print("\n%d file reference(s) checked" % checked)
+print("shipped docs only name reachable files, with dev-side refs disclosed: %s"
+      % (not fails))
+for f in fails:
+    print("  FAIL %s" % f)
+sys.exit(1 if fails else 0)

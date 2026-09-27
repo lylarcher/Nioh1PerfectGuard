@@ -1,0 +1,108 @@
+00:00:19.358 === Nioh1PerfectGuard 0.1.0-nioh1 ===
+00:00:19.359 CONFIG enabled=1 window=250ms reduction=100% topup=1 recovery=3 gate_timely=1
+00:00:19.359 base(nioh.exe)=0x7FF7AA2D0000
+00:00:19.359 SOUND loaded: 184320 bytes, 44100 Hz, 2 channels, 16-bit
+00:00:19.359 SOUND CoInitializeEx hr=0x00000000
+00:00:19.428 SOUND ready (XAudio2 engine=xaudio2_9.dll)
+00:00:19.428 ANCHOR ok   guard_flag_1       rva=0x74DD09
+00:00:19.429 ANCHOR ok   guard_flag_2       rva=0x74DD92
+00:00:19.429 ANCHOR ok   guard_ki_cost      rva=0x74DE51
+00:00:19.429 ANCHOR ok   inputmgr_getter    rva=0xE6BE90
+00:00:19.429 INPUT manager slot = 0x7FF7ABE48658 (from getter 0xE6BE90 + disp 0xD0C7C1)
+00:00:19.429 ANCHOR 4/4 verified
+00:00:19.430 INSTALL step=veh
+00:00:19.430 INSTALL step=arm veh=000001B357F7F490
+00:00:19.501 ARM pass: 374 threads seen, 373 newly armed
+00:00:19.501 INSTALL step=arm done
+00:00:19.501 SELFTEST breakpoint: OK: 5/5 probe calls trapped by the VEH (DR0=00007FFD392074D0, Dr7=L0 exec)
+00:00:19.503 INSTALL step=inputthread ith=00000000000027F4
+00:00:19.503 STATUS ACTIVE anchors=4/4 reduction=100% recovery=3 gate=1 mask=0x0100 slot=0 sound=1
+00:00:19.951 CONFIG reloaded: enabled=1 window=250ms reduction=100% topup=1 recovery=3 gate_timely=1 sound=1 vol=1.00 file=parry.wav
+00:00:49.112 ARM purge: dropped 1 stale thread id(s), 377 still tracked
+00:01:13.372 STATE (player object appeared - now in a mission) version=0.1.0-nioh1
+00:01:13.372 STATE anchors=4/4 installed=1 mask=0x0100 slot=0 vk=0 gate=1 window=250ms reduction=100% recovery=3
+00:01:13.372 STATE input slot=0x7FF7ABE48658 mgr=0x1B3F10D8050 pad=0x0000 conn=[1,0,0,0] guard_down=0 presses=0 lt=0 rt=0
+00:01:13.372 STATE player=0x1B36248E8F0 param=0x1B3624947D0 hp=880/880 ki=100/98 guard_res flag=-1 cur=0 cost=100 frame=0 action=0
+00:01:13.372 STATE ctx=0x0 charA=0x0 charB=0x0 | blocks=0 perfect=0 rewards=0 freeguards=0 rearmed=0 purged=1
+00:01:13.373 NOTICE: 1 controller slot(s) connected; guard mask 0x0100 on slot 0.
+00:01:13.373 KITRACE ki=100/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki AND entry7
+00:01:18.785 KITRACE ki=98/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:19.240 KITRACE ki=98/98 | entry7 flag=-1 cur=0 cost=100
+00:01:19.369 ARM purge: dropped 48 stale thread id(s), 415 still tracked
+00:01:25.211 KITRACE ki=98/98 | entry7 flag=-1 cur=0 cost=100
+00:01:26.210 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:26.695 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:26.874 KITRACE ki=90.92/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:26.945 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:29.767 KITRACE ki=90.92/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:29.832 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:30.836 KITRACE ki=81.69/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:31.118 KITRACE ki=86.01/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:32.048 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:32.280 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:32.287 KITRACE ki=90.92/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:35.256 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:35.737 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:35.885 GUARD FLAG #1 set via guard_flag_1 (ctx=0x1B3734F3700)
+00:01:35.886 FLAGDIAG via guard_flag_1 ctx=0x1B3734F3700 ctx160=-1 | A=0x1B36248E8F0 ply=1 st=-1 cur=0 cost=100 | B=0x1B362393D10 ply=0 st=-1 cur=0 cost=100 | atk=0x1B3C33B2640 ply=0 st=1065353216 cur=0 cost=0 | 
+00:01:35.895 KITRACE ki=77.73/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:35.972 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:36.899 KITRACE ki=95.51/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:37.120 KITRACE ki=98/98 | entry7 flag=-1 cur=0 cost=100
+00:01:38.440 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:38.456 GUARD FLAG #2 set via guard_flag_1 (ctx=0x1B3734F3280)
+00:01:38.457 FLAGDIAG via guard_flag_1 ctx=0x1B3734F3280 ctx160=-1 | A=0x1B36248E8F0 ply=1 st=-1 cur=0 cost=100 | B=0x1B362393D10 ply=0 st=-1 cur=0 cost=100 | atk=0x1B3C33B52F0 ply=0 st=-1019518560 cur=0 cost=-186.8 | 
+00:01:38.484 KITRACE ki=84.66/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:39.484 KITRACE ki=73.28/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:42.514 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:42.677 GUARD FLAG #3 set via guard_flag_1 (ctx=0x1B3734F37A0)
+00:01:42.678 FLAGDIAG via guard_flag_1 ctx=0x1B3734F37A0 ctx160=-1 | A=0x1B36248E8F0 ply=1 st=-1 cur=0 cost=100 | B=0x1B362393D10 ply=0 st=-1 cur=0 cost=100 | atk=0x1B3C33B5BA0 ply=0 st=-1019611408 cur=-nan cost=3.505e-42 | 
+00:01:42.678 NOTICE: 3 player blocks were seen by the guard-flag site but the guard-cost site has never fired, so the mod is using the flag event source. Rewards work, but the guard cost cannot be scaled at the subtract site, so reduction relies on KiTopUp=1 (keep it on). It will switch back automatically if a guard-cost event ever appears.
+00:01:42.678 PERFECT GUARD #1 via guard-flag (guard pressed 156ms ago)
+00:01:42.678 LAYOUT player=0x1B36248E8F0 hp=550/880 ki=77.73/98 action=3184 frame=2 | ctx=0x1B3734F37A0 charA=0x1B36248E8F0 charB=0x1B362393D10
+00:01:42.763 KITRACE ki=94.06/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:43.045 KITRACE ki=87.56/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:44.267 KITRACE ki=53.81/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:45.268 KITRACE ki=76.97/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:46.270 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:46.922 KITRACE ki=82.09/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:49.037 KITRACE ki=98/98 | entry7 flag=-1 cur=0 cost=100
+00:01:50.774 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:50.957 GUARD FLAG #4 set via guard_flag_1 (ctx=0x1B3734F3840)
+00:01:50.958 FLAGDIAG via guard_flag_1 ctx=0x1B3734F3840 ctx160=-1 | A=0x1B36248E8F0 ply=1 st=-1 cur=0 cost=100 | B=0x1B362393D10 ply=0 st=-1 cur=0 cost=100 | atk=0x1B3C33B6EF0 ply=0 st=-1861653232 cur=0 cost=-187.5 | 
+00:01:50.958 PERFECT GUARD #2 via guard-flag (guard pressed 188ms ago)
+00:01:50.958 LAYOUT player=0x1B36248E8F0 hp=691/880 ki=74.26/98 action=3184 frame=10 | ctx=0x1B3734F3840 charA=0x1B36248E8F0 charB=0x1B362393D10
+00:01:50.969 KITRACE ki=90.59/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:52.078 KITRACE ki=90.92/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:53.349 KITRACE ki=91.5/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:54.466 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:54.717 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:54.900 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:54.983 KITRACE ki=98/98 | entry7 flag=-1 cur=0 cost=100
+00:01:56.269 KITRACE ki=80.33/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:57.274 KITRACE ki=88.35/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:01:58.168 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:01:58.281 GUARD FLAG #5 set via guard_flag_1 (ctx=0x1B3734F3840)
+00:01:58.283 FLAGDIAG via guard_flag_1 ctx=0x1B3734F3840 ctx160=-1 | A=0x1B36248E8F0 ply=1 st=-1 cur=0 cost=100 | B=0x1B362393D10 ply=0 st=-1 cur=0 cost=100 | atk=0x1B3C33B72B0 ply=0 st=-1019629664 cur=-nan cost=-1.21e-18 | 
+00:01:58.283 PERFECT GUARD #3 via guard-flag (guard pressed 110ms ago)
+00:01:58.283 LAYOUT player=0x1B36248E8F0 hp=471/880 ki=74.26/98 action=3184 frame=6 | ctx=0x1B3734F3840 charA=0x1B36248E8F0 charB=0x1B362393D10
+00:01:58.301 KITRACE ki=90.59/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:02:00.977 KITRACE ki=98/98 | entry7 flag=-1 cur=0 cost=100
+00:02:01.453 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:02:01.569 GUARD FLAG #6 set via guard_flag_1 (ctx=0x1B3734F38E0)
+00:02:01.570 FLAGDIAG via guard_flag_1 ctx=0x1B3734F38E0 ctx160=-1 | A=0x1B36248E8F0 ply=1 st=-1 cur=0 cost=100 | B=0x1B362393D10 ply=0 st=-1 cur=0 cost=100 | atk=0x1B3C33B6840 ply=0 st=0 cur=0 cost=0 | 
+00:02:01.570 PERFECT GUARD #4 via guard-flag (guard pressed 109ms ago)
+00:02:01.570 LAYOUT player=0x1B36248E8F0 hp=471/880 ki=74.26/98 action=3184 frame=6 | ctx=0x1B3734F38E0 charA=0x1B36248E8F0 charB=0x1B362393D10
+00:02:01.982 KITRACE ki=93.29/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:02:02.992 KITRACE ki=95.78/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:02:04.426 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:02:04.522 GUARD FLAG #7 set via guard_flag_1 (ctx=0x1B3734F3890)
+00:02:04.522 FLAGDIAG via guard_flag_1 ctx=0x1B3734F3890 ctx160=-1 | A=0x1B36248E8F0 ply=1 st=-1 cur=0 cost=100 | B=0x1B362393D10 ply=0 st=-1 cur=0 cost=100 | atk=0x1B3C33B6460 ply=0 st=-996670610 cur=-0.5413 cost=0 | 
+00:02:04.522 PERFECT GUARD #5 via guard-flag (guard pressed 94ms ago)
+00:02:04.523 LAYOUT player=0x1B36248E8F0 hp=471/880 ki=77.73/98 action=3184 frame=5 | ctx=0x1B3734F3890 charA=0x1B36248E8F0 charB=0x1B362393D10
+00:02:04.547 KITRACE ki=94.06/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:02:06.628 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)
+00:02:06.628 KITRACE ki=90.92/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:02:06.911 KITRACE ki=90.92/98 | entry7 flag=-1 cur=0 cost=100
+00:02:07.944 KITRACE ki=85.54/98 | entry7 flag=-1 cur=0 cost=100  <-- changed: ki
+00:02:10.539 GUARD pressed (pad=0x0100 mask=0x0100 key=0x00 key_down=0)

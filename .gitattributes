@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# 字节级稳定性优先。
+#
+# 本项目对外发布 SHA256SUMS.txt，并要求 dist\ 里的 DLL 与已安装副本哈希完全
+# 一致。行尾规范化会在 checkout / add 时改写字节，从而**静默破坏**这两项校验
+# （本机 core.autocrlf=true，默认行为正是转换），所以所有路径一律禁止转换。
+# ─────────────────────────────────────────────────────────────────────────────
+* -text
+
+# 真正的二进制：连 diff / merge 也一并禁止
+*.dll   binary
+*.exe   binary
+*.wav   binary
+*.pdb   binary
+*.lib   binary
+*.pkl   binary
+*.bin   binary
+*.dmp   binary
+
+# 源码与文档：字节不转换，但仍允许 git 按文本 diff（方便 review）
+*.c     -text diff
+*.h     -text diff
+*.cpp   -text diff
+*.py    -text diff
+*.md    -text diff
+*.ini   -text diff
+*.ps1   -text diff
+*.txt   -text diff
+*.json  -text diff
+*.tsv   -text diff
