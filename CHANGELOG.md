@@ -19,6 +19,7 @@ CHANGELOG.md                本文件
 source\Nioh1PerfectGuard.c  完整源码（约 2500 行，可查阅 MOD 到底改了什么）
 source\pg_logic.h           纯逻辑单一来源（窗口 / 精力补回 / 精防回血 / 事件源判定 / 去重）
 SHA256SUMS.txt              校验和
+LICENSE.txt                 PolyForm Noncommercial 1.0.0（允许非商业使用，禁止商业用途）
 ```
 
 安装：把 `dinput8.dll`（通用 MOD 加载器）放到游戏根目录，
