@@ -5,7 +5,7 @@ A mod for **Nioh 1 Complete Edition** (`nioh.exe` 1.24.8) that adds a *perfect g
 player-side rewards. Chinese version: [`README-CN.md`](README-CN.md).
 
 > **User-facing manual** (installs with the package): `mod/README_CN.md`,
-> `mod/README_EN.md`, `mod/README_EN.md`, `QUICKSTART.md`, `验收测试说明.md` (acceptance test).
+> `mod/README_EN.md`, `mod/README_EN.md`, `docs/QUICKSTART.md`, `docs/验收测试说明.md` (acceptance test).
 > This file is the **project/engineering** readme.
 
 ---
@@ -38,7 +38,7 @@ player-side rewards. Chinese version: [`README-CN.md`](README-CN.md).
 * Rewards that touch the engine's own systems (the timed buffs) are **never called
   from the exception handler** — the handler only arms timers, and a watchdog thread
   performs engine calls. That path found a real crash and is documented in
-  `RE_NOTES.md` §4.52.2 / §4.54.
+  `docs/RE_NOTES.md` §4.52.2 / §4.54.
 
 ## Layout
 
@@ -46,11 +46,11 @@ player-side rewards. Chinese version: [`README-CN.md`](README-CN.md).
 mod/            MOD source (Nioh1PerfectGuard.c, pg_logic.h) + the shipped user docs
 tools/          analysis, verification and test scripts (24 python tools + Zig tests)
 docs/           plan documents (方案计划*.md)
-RE_NOTES.md     the reverse-engineering notebook — every address, dead end and correction
+docs/RE_NOTES.md     the reverse-engineering notebook — every address, dead end and correction
 CHANGELOG.md    delivery notes: what is verified, what was fixed, what is pending
-交接摘要.md      handover summary (state, limitations, next steps)
-验收测试说明.md   in-game acceptance test (the user-facing checklist)
-探针会话说明.md   probe-session write-up
+docs/交接摘要.md      handover summary (state, limitations, next steps)
+docs/验收测试说明.md   in-game acceptance test (the user-facing checklist)
+docs/探针会话说明.md   probe-session write-up
 build.ps1/.cmd  build → run all checks → produce dist\  (dist is generated, not tracked)
 dist/           the generated package (do not edit; run build.ps1)
 ```
@@ -85,16 +85,16 @@ the INI).
   `follow-up: action N -> M` in the log).
 * Pending in game: the martial-skill (guard + X/Y/A) cases end-to-end, which need the
   skills to be unlocked; the cancel gate already preserves the input by design
-  (`RE_NOTES.md` §4.53, `CHANGELOG.md` 2.0d).
+  (`docs/RE_NOTES.md` §4.53, `CHANGELOG.md` 2.0d).
 * Parked by decision: the timed buffs (their *install* path was proven in game; their
-  *removal* path crashed and was removed — `RE_NOTES.md` §4.54).
+  *removal* path crashed and was removed — `docs/RE_NOTES.md` §4.54).
 
 ## Known environment caveats
 
 * Installing requires the game to be **closed** (the DLL is held while it runs).
 * The DLL hash depends on the **absolute output path** (Zig/lld build id), so a
   rebuild elsewhere legitimately differs; `SHA256SUMS.txt` verifies the shipped copy,
-  not a rebuild (`RE_NOTES.md` §4.49).
+  not a rebuild (`docs/RE_NOTES.md` §4.49).
 * A protected/leftover `nioh.exe` cannot be terminated from an unelevated shell and
   will block new instances — end it with an elevated Task Manager, or reboot.
 

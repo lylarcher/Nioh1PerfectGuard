@@ -77,7 +77,7 @@ def log_literals(text):
 n_literals = len(log_literals(src))
 
 # documented markers: from the acceptance doc's marker table
-acc = io.open(os.path.join(root, "验收测试说明.md"), encoding="utf-8").read()
+acc = io.open(os.path.join(root, "docs", "验收测试说明.md"), encoding="utf-8").read()
 marker_lines, on = [], False
 for line in acc.splitlines():
     if line.startswith("#"):
@@ -113,9 +113,13 @@ CLAIMS = [
 
 fails = []
 for doc in STATUS_DOCS:
+    # CHANGELOG.md stays at the repository root; the other status documents live in
+    # docs/. Fall back to the copy inside the generated package if a source copy is
+    # missing, since CHANGELOG.md ships there.
     path = os.path.join(root, doc)
     if not os.path.exists(path):
-        # CHANGELOG ships inside the package; the source copy is authoritative.
+        path = os.path.join(root, "docs", doc)
+    if not os.path.exists(path):
         path = os.path.join(root, "dist", "Nioh1PerfectGuard", doc)
     if not os.path.exists(path):
         fails.append("%s not found" % doc)
