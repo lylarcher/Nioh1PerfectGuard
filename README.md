@@ -98,8 +98,23 @@ the INI).
 * A protected/leftover `nioh.exe` cannot be terminated from an unelevated shell and
   will block new instances — end it with an elevated Task Manager, or reboot.
 
-## License / scope
+## License
 
-Reverse engineering performed for personal, single-player use on a legally owned copy.
-The repository contains no game assets or binaries; only the mod's own source, notes
-and tooling.
+**PolyForm Noncommercial License 1.0.0** — see [`LICENSE`](LICENSE).
+Free for **any noncommercial purpose**: personal use, study, hobby projects,
+research, and use by charities, schools, public research bodies and government
+institutions. **Commercial use is not permitted** — you may not sell it, bundle it
+into a paid product, or distribute it as part of a monetised service.
+
+Two honest notes about what this license is and is not:
+
+* It is **source-available, not OSI "open source"**. No OSI-approved license can
+  forbid commercial use, so a "noncommercial open-source license" does not exist;
+  this is the standard way to get the restriction you asked for.
+* A short summary is not the license: the English text in `LICENSE` is what governs,
+  and it must travel with any copy you pass on (including the `Required Notice` line).
+
+Separately from the license: the mod contains **no game code, assets or data** from
+Nioh. Reverse engineering was done for personal, single-player use on a legally owned
+copy of the game. *Nioh* and all related marks belong to Koei Tecmo; this project is
+not affiliated with or endorsed by them.

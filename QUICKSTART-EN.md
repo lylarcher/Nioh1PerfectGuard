@@ -105,6 +105,8 @@ STATUS ACTIVE anchors=4/4 ...
 | the game crashes | send `%LOCALAPPDATA%\CrashDumps\nioh.exe.*.dmp` plus the log; use `DiagDisable` to bisect |
 | cannot install / DLL in use | the game must be closed first; a protected leftover `nioh.exe` needs an **elevated** Task Manager (or a reboot) |
 
+> Licence: this package is under the **PolyForm Noncommercial 1.0.0** (see `LICENSE.txt`) — **noncommercial use only**; selling it or bundling it into a paid product is not permitted.
+>
 > Documents inside the package: `README_CN.md` / `README_EN.md` (full manual),
 > `ACCEPTANCE_TEST.md` (in-game acceptance, Chinese), `CHANGELOG.md` (what is verified,
 > what was fixed), `source\` (the source, so you can check every offset it writes).

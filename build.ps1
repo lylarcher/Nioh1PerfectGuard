@@ -169,6 +169,7 @@ function New-Dist {
         @{ From = (Join-Path $ModDir 'README_EN.md');          To = 'README_EN.md' },
         @{ From = (Join-Path $Root   'docs\验收测试说明.md');  To = 'ACCEPTANCE_TEST.md' },
         @{ From = (Join-Path $Root   'CHANGELOG.md');          To = 'CHANGELOG.md' },
+        @{ From = (Join-Path $Root   'LICENSE');               To = 'LICENSE.txt' },
         @{ From = (Join-Path $ModDir 'Nioh1PerfectGuard.c');   To = 'source\Nioh1PerfectGuard.c' },
         @{ From = (Join-Path $ModDir 'pg_logic.h');            To = 'source\pg_logic.h' }
     )
