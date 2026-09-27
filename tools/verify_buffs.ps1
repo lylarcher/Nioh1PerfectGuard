@@ -94,13 +94,17 @@ while ((Get-Date) -lt $deadline) {
         $text = $sr.ReadToEnd(); $sr.Close(); $fs.Close()
     } catch { continue }
     foreach ($k in @('BUFF engine functions verified', 'BUFF engine functions MISMATCH',
-                     'BUFF dmgcut: state object', 'BUFF speed start', 'BUFF dmgcut start',
+                     'container check: present', 'container check: NOT FOUND',
+                     'after removal the state is gone', 'STILL PRESENT',
+                     'BUFF speed start', 'BUFF dmgcut start', 'BUFF armor start',
                      'BUFF dmgcut end', 'PERFECT GUARD')) {
         if ($text -match [regex]::Escape($k)) { $seen[$k] = $true }
     }
-    if ($seen.ContainsKey('BUFF dmgcut end')) { $verdict = 'DONE'; break }
-    if ($seen.ContainsKey('BUFF dmgcut: state object')) {
-        # 已装上：再多等 15 秒确认"到期能移除"，然后收工
+    # 判定用**读回容器**得到的强信号，而不是 add() 的返回值
+    if ($seen.ContainsKey('STILL PRESENT')) { $verdict = 'STUCK'; break }
+    if ($seen.ContainsKey('after removal the state is gone')) { $verdict = 'DONE'; break }
+    if ($seen.ContainsKey('container check: present')) {
+        # 已证明引擎收下了：再多等 15 秒确认"到期能移除"，然后收工
         $deadline = (Get-Date).AddSeconds(15)
     }
 }
@@ -117,8 +121,14 @@ if ($crashNew.Count -gt 0) { $verdict = 'CRASH' }
 
 switch ($verdict) {
     'DONE' {
-        Ok '移速/减伤增益走完了完整生命周期（start -> 装上 -> 到期 end）'
+        Ok '增益走完了完整生命周期，而且**读回容器确认**过：装上时 present、到期后 gone'
+        if ($seen.ContainsKey('container check: NOT FOUND')) {
+            Say '注意：安装时容器里没找到（布局推断可能不对）—— 这不算失败，但要告诉我'
+        }
         Say '请肉眼确认：带增益时移速更快、被打掉血约为原来的 96%'
+    }
+    'STUCK' {
+        Bad '增益到期了但状态对象**还在容器里**（移除没生效，增益会一直留着）—— 请把日志发回'
     }
     'CRASH' {
         Bad "游戏崩溃了，新崩溃转储：$($crashNew -join ', ')"
@@ -128,6 +138,8 @@ switch ($verdict) {
     'DIED'  { Bad '游戏进程消失了，但没看到新的崩溃转储（可能被 Steam 回收或其它原因）' }
     default { Bad "等待 $WaitSeconds 秒内没有走完流程（可能是没等到精防，或增益没启动）" }
 }
+Say ''
+Say ('看到的信号：' + (($seen.Keys | Sort-Object) -join ' / '))
 
 Say ''
 Say '本次新增的相关日志：'

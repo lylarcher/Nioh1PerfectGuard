@@ -1346,6 +1346,57 @@ static int buff_installed_mask(void) {
     return m;
 }
 
+// Read the engine's state container back and look for our state.
+//
+// `add()` returning 1 only means the call did not take an obvious failure path --
+// it is not proof that the engine kept the state. The container is a tree hanging
+// off [manager+0x170] whose nodes carry a key at +0x20, child links at +0x00/+0x10,
+// and a pointer to the state object at +0x28 whose state id is at +0x10 (all read
+// off the insert function 0x7A2890). Walking it turns "we called it" into "the
+// engine really has it".
+//
+// Every read goes through ReadProcessMemory on our own process: a wrong guess about
+// the layout then returns false instead of faulting, which matters because this
+// code runs on a thread that must not take the game down. Returns 1 = found,
+// 0 = not found, -1 = the container could not be read at all (so nothing is proven
+// either way -- the layout is inferred, and absence must not be reported as proof
+// that the install failed).
+#define PG_STATE_TREE_MAX 256
+
+static int buff_state_present(void *mgr, int state_id, void *want_obj) {
+    if (!mgr) return -1;
+    HANDLE self = GetCurrentProcess();
+    void *root = NULL;
+    SIZE_T got = 0;
+    if (!ReadProcessMemory(self, (char *)mgr + 0x170, &root, sizeof(root), &got)) return -1;
+    if (!root) return 0;
+
+    void *stack[64];
+    int sp = 0, visited = 0;
+    stack[sp++] = root;
+    while (sp > 0 && visited < PG_STATE_TREE_MAX) {
+        void *n = stack[--sp];
+        if (!n) continue;
+        visited++;
+        unsigned char marker = 0;
+        void *l = NULL, *r = NULL, *so = NULL;
+        if (!ReadProcessMemory(self, (char *)n + 0x19, &marker, 1, &got)) continue;
+        if (marker) continue;                      // header/leaf node: nothing below
+        ReadProcessMemory(self, (char *)n + 0x00, &l, sizeof(l), &got);
+        ReadProcessMemory(self, (char *)n + 0x10, &r, sizeof(r), &got);
+        if (!ReadProcessMemory(self, (char *)n + 0x28, &so, sizeof(so), &got)) continue;
+        if (so) {
+            int sid = -1;
+            if (ReadProcessMemory(self, (char *)so + 0x10, &sid, sizeof(sid), &got) &&
+                sid == state_id) {
+                if (!want_obj || so == want_obj) return 1;
+            }
+        }
+        if (sp < 62) { stack[sp++] = l; stack[sp++] = r; }
+    }
+    return 0;
+}
+
 typedef void *(*pg_state_ctor_fn)(void *mgr, float a, float b);
 typedef unsigned char (*pg_state_add_fn)(void *mgr, int key, void *obj, int flags,
                                          unsigned char stack0);
@@ -1467,8 +1518,12 @@ static int buff_engine_install(int i) {
     e->obj = obj;
     e->installed = 1;
     if (g_buff_log < 40) {
-        log_line("BUFF %s: state object 0x%llX added (add()=%u)", e->name,
-                 (unsigned long long)obj, (unsigned)ok);
+        int seen = buff_state_present(mgr, e->state_id, obj);
+        log_line("BUFF %s: state object 0x%llX added (add()=%u) container check: %s",
+                 e->name, (unsigned long long)obj, (unsigned)ok,
+                 seen == 1 ? "present"
+                           : (seen == 0 ? "NOT FOUND (layout guess may be wrong)"
+                                        : "unreadable"));
         g_buff_log++;
     }
     return 1;
@@ -1491,6 +1546,15 @@ static void buff_engine_remove(int i) {
         g_buff_log++;
     }
     rem(mgr, obj);
+    if (g_buff_log < 40) {
+        int seen = buff_state_present(mgr, e->state_id, obj);
+        // Unlike the install case, "still there" is a real finding: the state was
+        // supposed to be gone and is not, which would leave a buff applied forever.
+        log_line("BUFF %s: after removal the state is %s", e->name,
+                 seen == 1 ? "STILL PRESENT (removal did not take effect)"
+                           : (seen == 0 ? "gone" : "unverifiable (container unreadable)"));
+        g_buff_log++;
+    }
 }
 
 // Arm the timers. Called from the VEH -- pure arithmetic only, no engine calls.
