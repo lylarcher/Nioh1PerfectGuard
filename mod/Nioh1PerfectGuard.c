@@ -230,7 +230,7 @@ static void config_defaults(Config *c) {
     c->combo_guard_ms = 100;          // guard+attack within this window = combination
     c->cancel_attack_strict_hold = 0; // 1 = any held attack button blocks the cancel
     c->cancel_attack_frames = 30.0f;  // frames to advance past the rest of the action
-    c->cancel_attack_recent_ms = 1500; // an attack must have started this recently
+    c->cancel_attack_recent_ms = 0; // 0 = no gate: ANY guard press cancels
     // These must match the values shipped in Nioh1PerfectGuard.ini: if the INI is
     // missing or unreadable the mod runs on these, and a gate_timely of 0 would
     // silently turn *every* block into a perfect guard.
@@ -851,6 +851,16 @@ static PgGuardInput g_attack_in;
 static LONG g_cancel_log = 0;
 static LONG g_cancel_count = 0, g_cancel_skipped = 0;
 static void apply_attack_cancel(void);
+static int read_action_id(void *player);
+// Follow-up: what the action became shortly after a cancel. Advancing the motion
+// frame only *ends* the action; whether the character then actually guards is the
+// engine's decision (it depends on whether the engine buffered the press), and that
+// is the difference between "the mod did something" and "the feature works". So the
+// action id is sampled for a moment afterwards and the transition is logged.
+static int g_cancel_action_before = -1;
+static unsigned long long g_cancel_followup_until = 0;
+static int g_cancel_followup_done = 0;
+static int g_cancel_followup_before = -1;
 
 static void poll_guard_button(void) {
     if (!g_input_mgr_slot) return;
@@ -901,21 +911,33 @@ static void poll_guard_button(void) {
                      buttons, mask, g_cfg.guard_key_vk, key_down);
         }
         InterlockedIncrement(&g_guard_presses);   // display/diagnostic mirror only
-        // A pure guard press: cancel the attack if one is plausibly in progress.
+        // A pure guard press: cancel whatever the character is doing. This has
+        // nothing to do with the perfect-guard window -- the requirement is that
+        // *any* guard press (perfect block, normal block, no block at all) takes
+        // over immediately, so the only tests here are the combination test and
+        // the optional "must have attacked recently" gate (off by default).
         if (g_cfg.cancel_attack_on_guard) {
             int alone = pg_guard_alone(1, &g_attack_in, at_press, g_cfg.combo_guard_ms,
                                        g_cfg.cancel_attack_strict_hold);
-            int recent = (g_attack_in.press_ms != 0 && at_press >= g_attack_in.press_ms &&
+            int recent = 1;
+            if (g_cfg.cancel_attack_recent_ms > 0) {
+                recent = (g_attack_in.press_ms != 0 && at_press >= g_attack_in.press_ms &&
                           (at_press - g_attack_in.press_ms) <=
                               (unsigned long long)g_cfg.cancel_attack_recent_ms);
+            }
             if (alone && recent) {
                 apply_attack_cancel();
             } else {
                 InterlockedIncrement(&g_cancel_skipped);
                 if (g_cancel_log < 40) {
-                    log_line("ATTACK CANCEL skipped: %s (attack_down=%d last attack press "
-                             "%llums ago)", alone ? "no attack started recently" : "guard+attack combination",
-                             attack_down,
+                    // The current action id is included so the log can prove *what*
+                    // was running when the press was refused -- e.g. that a guard+X
+                    // martial-skill input did not disturb the attack in progress.
+                    void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+                    log_line("ATTACK CANCEL skipped: %s (action=%d pad=0x%04X "
+                             "attack_down=%d last attack press %llums ago)",
+                             alone ? "no attack started recently" : "guard+attack combination",
+                             pl ? read_action_id((void *)pl) : -1, buttons, attack_down,
                              g_attack_in.press_ms ? at_press - g_attack_in.press_ms : 0);
                     g_cancel_log++;
                 }
@@ -1809,10 +1831,51 @@ static void apply_attack_cancel(void) {
 
     *frame = v + g_cfg.cancel_attack_frames;
     InterlockedIncrement(&g_cancel_count);
+    // Arm the follow-up sample (the action id right after the cancel).
+    g_cancel_action_before = action;
+    g_cancel_followup_before = action;
+    g_cancel_followup_until = now_ms() + 400;
+    g_cancel_followup_done = 0;
     if (g_cancel_log < 40) {
         log_line("ATTACK CANCEL: action=%d motion frame %.3g -> %.3g (guard pressed "
                  "alone, attack within %dms)", action, v, *frame,
                  g_cfg.cancel_attack_recent_ms);
+        g_cancel_log++;
+    }
+}
+
+// Reads the current action id (Refer::ActionId), or -1.
+static int read_action_id(void *player) {
+    int action = -1;
+    unsigned long long p1 = 0, p2 = 0, p3 = 0;
+    SIZE_T got = 0;
+    if (ReadProcessMemory(GetCurrentProcess(), (char *)player + 0x230, &p1, 8, &got) && p1)
+        if (ReadProcessMemory(GetCurrentProcess(), (void *)(p1 + 8), &p2, 8, &got) && p2)
+            if (ReadProcessMemory(GetCurrentProcess(), (void *)(p2 + 0x58), &p3, 8, &got) && p3)
+                if (ReadProcessMemory(GetCurrentProcess(), (void *)(p3 + 0x20), &p2, 8, &got) && p2) {
+                    short v = 0;
+                    if (ReadProcessMemory(GetCurrentProcess(), (void *)(p2 + 0xC), &v, 2, &got))
+                        action = v;
+                }
+    return action;
+}
+
+// Called from the input thread: if a cancel just happened, log what the action
+// became. `A -> B` with B being the guard/idle action is the proof the feature works.
+static void attack_cancel_followup(void) {
+    if (g_cancel_followup_done || !g_cancel_followup_until) return;
+    unsigned long long now = now_ms();
+    if (now > g_cancel_followup_until) { g_cancel_followup_until = 0; return; }
+    if (!g_base) return;
+    void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+    if (!player) return;
+    int after = read_action_id(player);
+    if (after < 0 || after == g_cancel_followup_before) return;   // not changed yet
+    g_cancel_followup_done = 1;
+    g_cancel_followup_until = 0;
+    if (g_cancel_log < 60) {
+        log_line("ATTACK CANCEL follow-up: action %d -> %d after the cancel",
+                 g_cancel_followup_before, after);
         g_cancel_log++;
     }
 }
@@ -2813,6 +2876,7 @@ static DWORD WINAPI input_thread(LPVOID param) {
     Sleep(2500);
     while (1) {
         poll_guard_button();
+        attack_cancel_followup();
         ki_restore_tick();
         // Owns the timed-buff watchdog: applying/removing engine state happens
         // here and nowhere else, never in the exception handler.
