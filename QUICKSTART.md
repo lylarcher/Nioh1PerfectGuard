@@ -95,6 +95,8 @@ STATUS ACTIVE anchors=4/4 ...
 | 游戏崩溃 | 把 `%LOCALAPPDATA%\CrashDumps\nioh.exe.*.dmp` 与日志一起发回；必要时用 `DiagDisable` 逐项排查 |
 | 装不上 / DLL 被占用 | 游戏必须先退出；被保护的残留 `nioh.exe` 需**管理员权限**结束或重启 |
 
+> 作者 **lylarcher** ｜ 源码仓库：<https://github.com/lylarcher/Nioh1PerfectGuard>
+>
 > 协议：本包采用 **PolyForm Noncommercial 1.0.0**（见 `LICENSE.txt`）—— **允许非商业使用，禁止任何商业用途**（不得出售或打包进付费产品）。
 >
 > 包内文档：`README_CN.md` / `README_EN.md`（完整说明）、`ACCEPTANCE_TEST.md`（实机验收）、
