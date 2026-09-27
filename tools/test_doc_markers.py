@@ -105,7 +105,14 @@ fails = []
 # ---------------------------------------------------------------- log markers --
 marker_lines = section(text, "日志标记对照表")
 MARKERS = first_column_backticks(marker_lines)
-print("log markers claimed by the doc : %d" % len(MARKERS))
+# Report the row count as well: tools/test_doc_counts.py counts *rows*, while a
+# row may name more than one marker. The two numbers are both useful (spans are
+# what gets verified, rows are what a doc claims), and printing only one of them
+# left the two checkers looking like they disagreed for no reason.
+ROWS = sum(1 for line in marker_lines
+           if line.startswith("|")
+           and line.strip().strip("|").split("|")[0].strip().startswith("`"))
+print("log markers claimed by the doc : %d in %d row(s)" % (len(MARKERS), ROWS))
 missing = []
 for mk in MARKERS:
     toks = tokens(mk)

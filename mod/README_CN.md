@@ -130,6 +130,9 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `HpRecoveryMode` | 1 | **精防回血**：0 关 / **1 按最大 HP 百分比（默认）** / 2 固定值 / 3 两者相加 |
 | `HpRestorePercent` | 3 | 每次精防回复**最大 HP 的 3%**（向下取整：3% of 880 = 26） |
 | `HpRestoreFixed` | 50 | 模式 2 或 3 使用的固定回血量 |
+| `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **精防后移速增益**（0 = 关）。想启用设成 4。⚠ 本轮默认关：这是唯一调用游戏代码的功能，尚未实机验证 |
+| `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **精防后承受伤害降低**（0 = 关）。想启用设成 4 |
+| `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **霸体**：默认关；开启后每次精防给 5 秒。被打不硬直，但仍扣 HP/精力，**投技仍然抓你** |
 | `EnemyKiDamage` | 0 | 对敌削精（float，`[[char+0x240]+0x40]`） |
 | `EnemyHpDamage` | 0 | 对敌 HP（整数，`[[char+0x240]+0x20]`，可致死） |
 | `SoundEnabled` / `SoundVolume` / `SoundFile` | 1 / 1 / parry.wav | 精防提示音 |
