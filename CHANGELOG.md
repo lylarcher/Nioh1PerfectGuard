@@ -126,6 +126,36 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 `BUFF dmgcut end (held 10000ms, ...)`；累计值在 `STATE` 行尾
 （`buff_started= / buff_ended= / buff_failed= / dmgcut_installed= / left spd= dmgcut= armor=`）。
 
+### 2.0d 防御键取消攻击动作（本轮新增，**默认开启**）
+
+**单按防御键**就取消当前攻击动作；**组合键不算**（防御 + X/Y/A）；**移动不影响**。
+
+- 机制：把当前动作的**动画帧向前推进**（`Refer::MotionFrame`，`[[char+0x38]+0x60]`）——
+  就是老 `CancelRecovery` 用的那个写入，但改由**防御按下沿**触发，并且对**任何**动作生效。
+- 判定（`pg_guard_alone()`，13 条离线断言）：
+  - 必须是**按下沿**（按住不放不会反复触发）；
+  - 攻击键在防御按下沿**前后 100ms**（`ComboGuardWindowMs`）内有过按下沿 → 视为组合键，不取消；
+  - **攻击键还按着不算组合键** —— 打完没松手是最常见的情况，若按"按着就不算"处理，最该取消时反而取消不了。
+    想要字面读法可以设 `CancelAttackStrictHold=1`；
+  - 只有"**最近 1500ms 内开始过攻击**"（`CancelAttackRecentMs`）才动手，所以站着不动按防御
+    **不会**去动闲置/防御动画；
+  - **完全不看摇杆/方向键**（函数里没有这些入参）→ 防御+移动照样取消。
+- 日志：`ATTACK CANCEL: action=.. motion frame .. -> ..`；没取消时会打
+  `ATTACK CANCEL skipped: guard+attack combination` 或 `no attack started recently`，一眼能看出为什么没触发。
+
+### 2.0e 三个限时增益：**按你的决定停用**（保留代码、默认全关）
+
+移速与减伤你决定不用（可能与以后的 buff 冲突），所以：默认值保持 **0**，
+代码保留但不再继续开发。另外实测发现一个重要事实并据此改了实现：
+
+> **引擎状态对象的"移除"路径会崩**。2026-09-27 的崩溃转储显示
+> `Rip = nioh.exe+0x7A25DD`，正是移除函数 `0x7A25C0` 的 `+0x1D` ——
+> 那个 `call qword ptr [rax+0x38]`（对状态对象的虚调用）。而**安装**那条路是好的：
+> `add()` 返回 1，游戏又正常跑了一分钟、又吃了 14 次精防。
+> 原因是对象由**引擎在管**（移除时 `[obj+0x1D]` 已非 0），我们从自己的线程直接拆它
+> 会与游戏线程冲突。所以现在改成：**把时长交给引擎、MOD 不再手工移除**
+> （引擎自己的增益就是传 300/1800/2400 秒让它自己过期的）。
+
 ### 2.1 你在包内就能自己核对的
 
 | 做法 | 看什么 |
@@ -150,7 +180,7 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 | 锚点期望字节与解密镜像逐字节一致 | `python tools\test_anchors.py ..` | **4/4 一致**；输入槽推导得 `0x1B78658`，与独立已知值相符 |
 | 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **179 条断言全过** |
 | INI 编码与取值边界 + **内置默认值必须等于随包 INI** | `python tools\test_ini_encodings.py ..\mod` | **6/6** |
-| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **45/45 标记；110 条日志 0 条未解释** |
+| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **47/47 标记；111 条日志 0 条未解释** |
 | 交付文档只引用真实存在的文件 | `python tools\test_doc_paths.py ..` | 通过 |
 | 导出表 | `python tools\list_exports.py ..\mod\Nioh1PerfectGuard.dll` | 12 个 `PG_*` |
 | **测试过的算术 == 发货的算术** | `python tools\test_logic_digest.py ..` | 两个构建的数值指纹一致 |

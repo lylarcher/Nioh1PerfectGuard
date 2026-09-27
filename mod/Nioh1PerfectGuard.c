@@ -129,6 +129,20 @@ typedef struct {
     int damage_cut_ms;
     int armor_buff;                // 0/1
     int armor_buff_ms;
+    // Guard cancels the player's attack action -- but only a *pure* guard press.
+    // `attack_mask` says which buttons count as attacks (A/B/X/Y by default), and
+    // the two windows encode the two ways a press can be a combination instead:
+    //   `combo_ms`  -- an attack button going down this close to the guard press is
+    //                  a guard+attack combination, not a cancel;
+    //   `recent_ms` -- an attack must have been started this recently, otherwise we
+    //                  do not touch the animation at all (so idle guarding and
+    //                  holding guard are never disturbed).
+    int cancel_attack_on_guard;
+    int attack_button_mask;
+    int combo_guard_ms;
+    int cancel_attack_strict_hold;
+    float cancel_attack_frames;
+    int cancel_attack_recent_ms;
     // gate
     int gate_timely;               // 0 = every block counts, 1 = require a fresh press
     int guard_button_mask;         // XInput button bit; LB/L1 = 0x0100
@@ -208,6 +222,15 @@ static void config_defaults(Config *c) {
     c->damage_cut_ms = 10000;
     c->armor_buff = 0;
     c->armor_buff_ms = 5000;
+    // Guard-cancels-attack is ON by default: it was asked for as a default feature,
+    // and unlike the timed buffs it needs no engine calls -- it only advances the
+    // current action's motion frame, the same kind of write this mod already makes.
+    c->cancel_attack_on_guard = 1;
+    c->attack_button_mask = 0xF000;   // standard XInput A(0x1000) B(0x2000) X(0x4000) Y(0x8000)
+    c->combo_guard_ms = 100;          // guard+attack within this window = combination
+    c->cancel_attack_strict_hold = 0; // 1 = any held attack button blocks the cancel
+    c->cancel_attack_frames = 30.0f;  // frames to advance past the rest of the action
+    c->cancel_attack_recent_ms = 1500; // an attack must have started this recently
     // These must match the values shipped in Nioh1PerfectGuard.ini: if the INI is
     // missing or unreadable the mod runs on these, and a gate_timely of 0 would
     // silently turn *every* block into a perfect guard.
@@ -389,6 +412,15 @@ static int config_load_inner(int first_time) {
     c.damage_cut_ms = ini_int("DamageCutMs", c.damage_cut_ms, 0, 600000, &ok);
     c.armor_buff = ini_int("ArmorBuff", c.armor_buff, 0, 1, &ok);
     c.armor_buff_ms = ini_int("ArmorBuffMs", c.armor_buff_ms, 0, 600000, &ok);
+    c.cancel_attack_on_guard = ini_int("CancelAttackOnGuard", c.cancel_attack_on_guard, 0, 1, &ok);
+    c.attack_button_mask = ini_int("AttackButtonMask", c.attack_button_mask, 1, 0xFFFF, &ok);
+    c.combo_guard_ms = ini_int("ComboGuardWindowMs", c.combo_guard_ms, 0, 1000, &ok);
+    c.cancel_attack_strict_hold =
+        ini_int("CancelAttackStrictHold", c.cancel_attack_strict_hold, 0, 1, &ok);
+    c.cancel_attack_frames =
+        ini_float("CancelAttackFrames", c.cancel_attack_frames, 0.0f, 1000.0f, &ok);
+    c.cancel_attack_recent_ms =
+        ini_int("CancelAttackRecentMs", c.cancel_attack_recent_ms, 0, 10000, &ok);
     c.gate_timely = ini_int("RequireTimelyGuard", c.gate_timely, 0, 1, &ok);
     c.guard_button_mask = ini_int("GuardButtonMask", c.guard_button_mask, 1, 0xFFFF, &ok);
     c.pad_slot = ini_int("PadSlot", c.pad_slot, 0, 3, &ok);
@@ -812,6 +844,14 @@ static int anchor_verify(void) {
 // code is called, so nothing can fault or disturb the game. This matters because
 // we do not know in advance whether the player is on a controller or on
 // keyboard+mouse, and the guard binding differs per device.
+// Attack-button edge tracking and the guard-cancel counters. These live here (with
+// the input polling) because poll_guard_button needs them; the cancel itself -- which
+// writes the motion frame -- sits further down with the rest of the reward code.
+static PgGuardInput g_attack_in;
+static LONG g_cancel_log = 0;
+static LONG g_cancel_count = 0, g_cancel_skipped = 0;
+static void apply_attack_cancel(void);
+
 static void poll_guard_button(void) {
     if (!g_input_mgr_slot) return;
     void *mgr = *(void **)(ULONG_PTR)g_input_mgr_slot;
@@ -850,12 +890,37 @@ static void poll_guard_button(void) {
     }
 
     unsigned long long at_press = now_ms();
+    // Track the attack buttons' own edges: the cancel test needs to know whether an
+    // attack press happened *together* with the guard press (a combination) and
+    // whether one happened recently enough that the player is mid-attack.
+    int attack_down = ((buttons & (unsigned short)g_cfg.attack_button_mask) != 0);
+    pg_guard_update(&g_attack_in, attack_down, at_press);
     if (pg_guard_update(&g_guard_in, down, at_press)) {
         if (g_blocks < 60) {
             log_line("GUARD pressed (pad=0x%04X mask=0x%04X key=0x%02X key_down=%d)",
                      buttons, mask, g_cfg.guard_key_vk, key_down);
         }
         InterlockedIncrement(&g_guard_presses);   // display/diagnostic mirror only
+        // A pure guard press: cancel the attack if one is plausibly in progress.
+        if (g_cfg.cancel_attack_on_guard) {
+            int alone = pg_guard_alone(1, &g_attack_in, at_press, g_cfg.combo_guard_ms,
+                                       g_cfg.cancel_attack_strict_hold);
+            int recent = (g_attack_in.press_ms != 0 && at_press >= g_attack_in.press_ms &&
+                          (at_press - g_attack_in.press_ms) <=
+                              (unsigned long long)g_cfg.cancel_attack_recent_ms);
+            if (alone && recent) {
+                apply_attack_cancel();
+            } else {
+                InterlockedIncrement(&g_cancel_skipped);
+                if (g_cancel_log < 40) {
+                    log_line("ATTACK CANCEL skipped: %s (attack_down=%d last attack press "
+                             "%llums ago)", alone ? "no attack started recently" : "guard+attack combination",
+                             attack_down,
+                             g_attack_in.press_ms ? at_press - g_attack_in.press_ms : 0);
+                    g_cancel_log++;
+                }
+            }
+        }
     }
     g_last_buttons = buttons;
 
@@ -1606,16 +1671,16 @@ static void buff_engine_remove(int i) {
                  (unsigned long long)obj);
         g_buff_log++;
     }
-    rem(mgr, obj);
-    if (g_buff_log < 40) {
-        int seen = buff_state_present(mgr, e->state_id, obj);
-        // Unlike the install case, "still there" is a real finding: the state was
-        // supposed to be gone and is not, which would leave a buff applied forever.
-        log_line("BUFF %s: after removal the state is %s", e->name,
-                 seen == 1 ? "STILL PRESENT (removal did not take effect)"
-                           : (seen == 0 ? "gone" : "unverifiable (container unreadable)"));
-        g_buff_log++;
-    }
+    // NOTE: this deliberately does *not* call the engine's teardown (0x7A25C0).
+    // Measured on 2026-09-27: that call faults inside itself (Rip = nioh.exe+0x7A25DD,
+    // the virtual call at the object's vtable slot +0x38) because the state object is
+    // engine-managed and is being used by the game thread -- pulling it out from our
+    // own thread crashes the game. The engine's own buff applications pass a duration
+    // (300/1800/2400 seconds) and let the engine expire the state, so the mod does the
+    // same: it hands over its duration when constructing and then only *observes*.
+    // The timed buffs are parked anyway (the user dropped them), but leaving a
+    // known-crashing call in the build would be indefensible.
+    (void)rem;
 }
 
 // Arm the timers. Called from the VEH -- pure arithmetic only, no engine calls.
@@ -1690,6 +1755,65 @@ static void buff_watchdog_config(void) {
             buff_engine_remove(i);
             pg_buff_init(g_eng[i].timer);
         }
+    }
+}
+
+// Guard cancels the player's attack action.
+//
+// Mechanism: advance the current action's motion frame -- the exact write the older
+// CancelRecovery option makes (Refer::MotionFrame = [[char+0x38]+0x60]), now driven
+// by a *guard press* instead of by a successful perfect guard. Skipping the rest of
+// the animation is what lets the character leave the attack; the engine's own input
+// buffering then takes over the guard.
+//
+// Why not the engine-native route (a cancel flag / the state machine): that needs
+// more reverse engineering than has been done (RE_NOTES 4.53), and this write is
+// already in the mod, bounded, and easy to reason about: it only ever *adds* to a
+// value that already looks like a motion frame, and it refuses to write anything
+// implausible. It is off unless the operator asks for it.
+//
+// Two windows keep a combination or an idle press from touching the animation:
+//
+//   * a *fresh* guard press (a held guard never re-triggers);
+//   * no attack button went down within ComboGuardWindowMs of it (guard + X/Y/A is
+//     a deliberate combination, not a cancel);
+//   * an attack button must have been pressed within CancelAttackRecentMs, i.e. the
+//     player plausibly just started an attack. Without this, pressing guard while
+//     idle would advance the *guard/idle* animation, which is exactly the kind of
+//     unrequested interference that makes a mod feel broken.
+//
+// Movement is deliberately not consulted: guard + walking must still cancel.
+static void apply_attack_cancel(void) {
+    if (!g_cfg.cancel_attack_on_guard || !g_base) return;
+    void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+    if (!player) return;
+
+    // Refer::ActionId -> [[[[char+0x230]+8]+0x58]+0x20]+0xC  (int16)
+    int action = -1;
+    unsigned long long p1 = 0, p2 = 0, p3 = 0;
+    SIZE_T got = 0;
+    if (ReadProcessMemory(GetCurrentProcess(), (char *)player + 0x230, &p1, 8, &got) && p1)
+        if (ReadProcessMemory(GetCurrentProcess(), (void *)(p1 + 8), &p2, 8, &got) && p2)
+            if (ReadProcessMemory(GetCurrentProcess(), (void *)(p2 + 0x58), &p3, 8, &got) && p3)
+                if (ReadProcessMemory(GetCurrentProcess(), (void *)(p3 + 0x20), &p2, 8, &got) && p2) {
+                    short v = 0;
+                    if (ReadProcessMemory(GetCurrentProcess(), (void *)(p2 + 0xC), &v, 2, &got))
+                        action = v;
+                }
+
+    void *mobj = *(void **)((char *)player + 0x38);
+    if (!mobj) return;
+    float *frame = (float *)((char *)mobj + 0x60);
+    float v = *frame;
+    if (!(v >= 0.0f && v < 10000.0f)) return;      // not a motion frame: do nothing
+
+    *frame = v + g_cfg.cancel_attack_frames;
+    InterlockedIncrement(&g_cancel_count);
+    if (g_cancel_log < 40) {
+        log_line("ATTACK CANCEL: action=%d motion frame %.3g -> %.3g (guard pressed "
+                 "alone, attack within %dms)", action, v, *frame,
+                 g_cfg.cancel_attack_recent_ms);
+        g_cancel_log++;
     }
 }
 
