@@ -3360,6 +3360,30 @@ mulss xmm0, [rcx+0x50]     ; 伤害 × 状态参数  → 0.96 就是"承受伤�
 4. 若第 1、2 步都指向"没有可写的门"，再考虑退回路线 B（复用 `CancelRecovery` 的动画帧写入，
    跳帧风险，且那个写入本身仍未验证）或 C（直写动作 ID，最险）。
 
+### 4.53.5 附：47 个 `Refer::` 节点的**注册顺序**（实测，2026-09-27）
+
+第一次实机运行拿到的注册表顺序（与 `.rdata` 名字串顺序一致，前 5 项在 `.rdata` 那段之前）：
+
+```
+MotionId, MotionFrame, ActionId, PrevActionId, IsMtdFlag,
+CharaType, CharaNumber, AiAvoidCollisionHitFrame, AiAttackCollisionHitFrame,
+Hp, MaxHp, HpRate, Stamina, StaminaRate, IsInDeadArea, IsInTokoyoArea, IsInSmokeArea,
+Speed, AlivePlayerNum, EdgeCollisionHitFrame, SkipTimes,
+HighStanceRate, MidStanceRate, LowStanceRate,
+StealExpAmuritaSum, StealExpAmuritaBaseSum, NoticeDistance, IsNoticeChain, IsDead,
+DefenseRange, IsAttackHitAfter, IsAttackGuard, IsItemShortCut, GetConnectionAttributes,
+IsBuffStatus, IsDebuffStatus, IsEnchant, GetSearchRangeVisionCoef, GetSearchRangeHearingCoef,
+GetActionPriorityType, GetShiguruiDifficult, GetCharacterDataSkillID, GetCharacterDataGestureID,
+GetCharacterDataShortCutItemID, GetPlacementShiguruiDataSkillID,
+GetPlacementShiguruiDataGestureID, GetMissionItemLevel
+```
+
+**它为什么有用**：`0x2F265A0` 那张 12 字节记录表（`{handler_start, handler_end, desc}`）
+不带名字，而且我核对过：它的顺序**不等于**名字顺序（例：`HighStanceRate` 在表里排在
+`Hp` **之前**，在名字里排在 `StaminaRate` **之后**）。所以靠顺序对齐**不行**；
+真正的桥是"把每个节点记录里**名字之后**的那个 qword 读出来"（见 §4.52.10 结果三），
+拿到处理函数指针后与那张表的 `handler_start` 对齐即可。
+
 ### 4.52.4 参数语义实测清楚（第二轮补充）
 
 把引擎应用增益的那段辅助函数（`0x767440` 一带，一个 `cmp edx,<id>` 分发多个增益）
@@ -3471,6 +3495,50 @@ mulss xmm0, [rcx+0x50]     ; 伤害 × 状态参数  → 0.96 就是"承受伤�
    （带增益 / 不带增益各一份），把"感觉快了"变成数字；
 2. **防御取消攻击**（§4.53）：同一张表能给出 `Refer::IsAttackHitAfter` 等条件标志的地址，
    比现在"顺着 143 个调用者猜"要省得多。
+
+### 4.52.10 第一次真正启动游戏的记录（第三轮末，含一次环境事故）
+
+用户授权我自行启动游戏测试。已安装新 DLL（`35F87B81…`，含读回容器与 NODEREG 诊断），
+并把 `SpeedBuffPercent`/`DamageCutPercent` 临时打开成 4。
+
+**结果一：新 DLL 装得上、也加载得起来**（`mods` 里的 DLL **没有被锁**，
+所以覆盖安装成功；loader 日志显示 `Loading mod: …Nioh1PerfectGuard.dll`）：
+`ANCHOR 4/4 verified`、`SELFTEST breakpoint: OK: 5/5`、`STATUS ACTIVE`、
+`SOUND ready`，以及 `NODEREG done: 47 Refer:: entries`。
+
+**结果二（重要收获）：47 个 `Refer::` 名字的注册顺序拿到了**（见 §4.53.5），
+而且它与 `.rdata` 里名字串的排列**一致**（注册表前面多出 5 项：`MotionId`/`MotionFrame`/
+`ActionId`/`PrevActionId`/`IsMtdFlag`）。这 5 项正好是 §4.12 表里靠 getter 反推出来的那几个。
+
+**结果三：我的布局猜测错了一处**（如实记下）：日志里 `pair2=` 打出来的其实是
+**名字串自己的后半段**（例如 `Refer::MotionId` → `0x64496E6F69746F` = `"otionId"`）。
+说明节点记录是 `{char name[]; …}`（名字**内联**在记录开头），而不是我想的
+"名字指针在 +0，处理函数在 +8"。**下次要把名字 NUL 之后的那些 qword 打出来**，
+才能拿到处理函数指针 —— 这是个一行改动，但本轮没再改（见"环境事故"）。
+
+**结果四：跑约 3 分钟后崩溃，且与本轮新代码无关**（证据链完整）：
+
+- 异常 `0xC0000005`，`nioh.exe+0x52F321`，`Dr6 = 0xFFFF0FF0` ⇒ **B0–B3 全 0，没有任何断点命中**；
+- 日志里 **`PERFECT GUARD` = 0、`BUFF` = 0、`installing/removing engine state` = 0、`KITRACE` = 0**
+  ⇒ 这个 session 里 MOD **没有写过任何游戏内存、也没有调用过任何引擎函数**，
+  增益代码**根本没被执行到**；
+- 本轮唯一相关的变数是**同时有两个游戏实例**在跑（旧实例 pid 21900 结束不掉）。
+
+⚠ **对 §4.43 的更正**：那一节把 `0x52F321` 归因于"滚动重装（rearm_batch）"。
+本次崩溃发生在 **`DiagDisable=0`（滚动重装是关的，日志里只有 `ARM purge`、没有 re-arm）**
+的情况下，**同一个地址**。所以"这个地址 = 滚动重装"这个单一归因**不成立**：
+要么存在两个原因，要么当时就有环境因素。下次必须在**单实例**环境里复现才能定论。
+
+**结果五：一次环境事故，必须如实交代**。为了清掉那个结束不掉的旧实例，我执行了
+`steam.exe -shutdown`。后果：
+
+- **旧实例 nioh.exe (21900) 没被带走**（Steam 关了它还在；`taskkill`/`Stop-Process`/WMI
+  `Terminate` 全部 `Access is denied`）；
+- **Steam 重启后处于未登录状态**（`HKCU\…\ActiveProcess\ActiveUser = 0`），
+  于是之后两次启动游戏都在**loader 还没扫 mods 之前**就退出
+  （loader 日志只有 `Session started`，没有 `Loading mod`）—— 也就是说
+  **现在的环境里游戏起不来了，而且与 MOD 无关**（其中一次还是 `Enabled=0` 完全旁路）。
+- 我无法在非提权的情况下恢复它：需要**用户登录 Steam**（并最好结束/重启那个旧实例）。
 
 ---
 
