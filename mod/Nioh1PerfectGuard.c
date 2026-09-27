@@ -1243,6 +1243,54 @@ static void apply_hp_restore(void) {
     }
 }
 
+// ------------------------------------------------- node registry dump (once) --
+//
+// The engine registers its data-driven nodes ("Refer::Hp", "Refer::Speed", ...) in
+// a table whose *entries* live on the heap: at a fixed RVA the module holds pairs
+// of absolute heap pointers, so the names are heap strings and cannot be resolved
+// from a module dump (that is why hunting "Refer::Speed" from disk failed). The
+// mod, however, runs inside the game.
+//
+// So: read the table once and log the Refer:: names with whatever the paired word
+// points at. This is *read-only*, every access goes through ReadProcessMemory, and
+// the whole thing is bounded -- a wrong guess about the layout prints a short block
+// of nonsense instead of touching anything. Its purpose is to let one session hand
+// back the name -> handler map, which is what the remaining reverse engineering
+// (the movement-speed value, and the attack-cancel gate) needs.
+#define PG_RVA_NODE_REGISTRY 0x119E400
+#define PG_NODE_REG_MAX 512
+#define PG_NODE_LOG_MAX 60
+
+static void dump_node_registry_once(void) {
+    if (!g_base) return;
+    HANDLE self = GetCurrentProcess();
+    const unsigned long long table = (unsigned long long)(ULONG_PTR)g_base + PG_RVA_NODE_REGISTRY;
+    int logged = 0;
+    for (int i = 0; i < PG_NODE_REG_MAX && logged < PG_NODE_LOG_MAX; ++i) {
+        void *node = NULL;
+        if (!ReadProcessMemory(self, (void *)(table + (unsigned long long)i * 16), &node,
+                               sizeof(node), NULL)) break;
+        if (!node) break;
+        char name[64] = {0};
+        if (!ReadProcessMemory(self, node, name, sizeof(name) - 1, NULL)) continue;
+        if (!(name[0] >= 32 && name[0] < 127)) continue;
+        if (strncmp(name, "Refer::", 7) != 0) continue;
+        unsigned long long second = 0;
+        if (!ReadProcessMemory(self, (char *)node + 8, &second, sizeof(second), NULL)) continue;
+        // Report the paired word as an RVA when it is inside this module (that is
+        // how a handler would look) and as a raw value otherwise.
+        unsigned long long mod = (unsigned long long)(ULONG_PTR)g_base;
+        if (second >= mod && second < mod + 0x4000000) {
+            log_line("NODEREG %s pair2=0x%llX (module rva 0x%llX)", name, second,
+                     second - mod);
+        } else {
+            log_line("NODEREG %s pair2=0x%llX (not this module)", name, second);
+        }
+        logged++;
+    }
+    log_line("NODEREG done: %d Refer:: entries read from the node registry", logged);
+}
+
 // ------------------------------------------------------------- timed buffs ---
 //
 // A perfect guard grants up to three temporary effects: move speed, damage taken,
@@ -2783,6 +2831,11 @@ static DWORD WINAPI worker(LPVOID param) {
                  g_anchor_count);
     }
     log_line("STATUS %s", g_status);
+    // One-time, read-only: resolve the engine's node names while we are inside the
+    // process (see the node-registry section). Its output is what the remaining
+    // reverse engineering needs, and it cannot be obtained from outside because the
+    // registry lives on the heap.
+    dump_node_registry_once();
 
     int pass = 0;
     while (1) {
