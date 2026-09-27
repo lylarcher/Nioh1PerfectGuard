@@ -116,7 +116,7 @@ apply **within about a second** while the game is running.
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **Armour** (dropped by decision, see below) |
 | `CancelAttackOnGuard` | **1** | **A pure guard press cancels the current attack** (0 = off). Guard+X/Y/A is a combination and does not cancel; movement is irrelevant |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | Which buttons count as attacks / how close a press counts as a combination |
-| `CancelAttackStrictHold` / `CancelAttackFrames` / `CancelAttackRecentMs` | 0 / 30 / 1500 | Strict “held blocks” mode / motion frames advanced / how recent an attack must be |
+| `CancelAttackStrictHold` / `CancelAttackFrames` / `CancelAttackRecentMs` | 0 / 30 / **0** | Strict “held blocks” mode / motion frames advanced / **0 = any guard press cancels** (perfect and normal blocks alike) |
 | `BlockEventSource` | 2 | **Which event means the player blocked**: `2` auto (recommended) / `0` guard-cost site only / `1` guard-flag site only |
 | `DiagDisable` | 0 | Diagnostic bitmask, keep at 0: `1` no breakpoints / `2` no input thread / `4` enable the rolling re-arm (**known to crash the game**) / `8` skip the self-test |
 | `EnemyKiDamage` | 0 | Ki damage to the attacker (`[[char+0x240]+0x40]`) |

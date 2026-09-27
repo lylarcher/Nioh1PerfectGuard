@@ -137,8 +137,15 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
   - 攻击键在防御按下沿**前后 100ms**（`ComboGuardWindowMs`）内有过按下沿 → 视为组合键，不取消；
   - **攻击键还按着不算组合键** —— 打完没松手是最常见的情况，若按"按着就不算"处理，最该取消时反而取消不了。
     想要字面读法可以设 `CancelAttackStrictHold=1`；
-  - 只有"**最近 1500ms 内开始过攻击**"（`CancelAttackRecentMs`）才动手，所以站着不动按防御
-    **不会**去动闲置/防御动画；
+  - **不区分精防与普通防御**：只要防御键**按下**就取消（`CancelAttackRecentMs=0` 默认关闭了
+    “必须先打过攻击”这道闸门）。想恢复那道闸门就把它设成非 0；
+  - **武技（防御+X/Y/A）的两个方向都按预期**，并有 7 条断言专门钉住：
+    ①*武技输入本身不会取消别的攻击*（它落在组合键窗口内 → 跳过。两种按下顺序都测了）；
+    ②*武技进行中仍可被后来的单按防御取消*（武技自己的攻击键是很久以前按下的，
+    不会被当成组合键；就算手指还按着也算"单按防御"，除非开 `CancelAttackStrictHold=1`）；
+    组合键窗口默认 100ms，手速慢可以调大（`ComboGuardWindowMs`）；
+  - 取消之后还会再采一次动作 ID，打出 `ATTACK CANCEL follow-up: action N -> M`
+    —— 只有动作**真的换了**（M 通常是防御/待机）才算"防御立刻接管"，这是这项功能的硬证据；
   - **完全不看摇杆/方向键**（函数里没有这些入参）→ 防御+移动照样取消。
 - 日志：`ATTACK CANCEL: action=.. motion frame .. -> ..`；没取消时会打
   `ATTACK CANCEL skipped: guard+attack combination` 或 `no attack started recently`，一眼能看出为什么没触发。
@@ -178,9 +185,9 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
 | 锚点期望字节与解密镜像逐字节一致 | `python tools\test_anchors.py ..` | **4/4 一致**；输入槽推导得 `0x1B78658`，与独立已知值相符 |
-| 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **179 条断言全过** |
+| 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **186 条断言全过** |
 | INI 编码与取值边界 + **内置默认值必须等于随包 INI** | `python tools\test_ini_encodings.py ..\mod` | **6/6** |
-| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **47/47 标记；111 条日志 0 条未解释** |
+| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **48/48 标记；112 条日志 0 条未解释** |
 | 交付文档只引用真实存在的文件 | `python tools\test_doc_paths.py ..` | 通过 |
 | 导出表 | `python tools\list_exports.py ..\mod\Nioh1PerfectGuard.dll` | 12 个 `PG_*` |
 | **测试过的算术 == 发货的算术** | `python tools\test_logic_digest.py ..` | 两个构建的数值指纹一致 |

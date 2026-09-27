@@ -135,7 +135,7 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **霸体**（已决定不使用，见下） |
 | `CancelAttackOnGuard` | **1** | **单按防御键取消当前攻击动作**（0 = 关）。防御+X/Y/A 这类组合键**不算**；移动不影响 |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | 哪些键算攻击键 / 与防御键相隔多少毫秒内算“组合键” |
-| `CancelAttackStrictHold` / `CancelAttackFrames` / `CancelAttackRecentMs` | 0 / 30 / 1500 | 严格模式（按着就不取消）/ 动画帧推进量 / 多久内开始过攻击才算“正在攻击” |
+| `CancelAttackStrictHold` / `CancelAttackFrames` / `CancelAttackRecentMs` | 0 / 30 / **0** | 严格模式（按着就不取消）/ 动画帧推进量 / **0 = 任何防御按下都取消**（不区分精防与普通防御）|
 | `EnemyKiDamage` | 0 | 对敌削精（float，`[[char+0x240]+0x40]`） |
 | `EnemyHpDamage` | 0 | 对敌 HP（整数，`[[char+0x240]+0x20]`，可致死） |
 | `SoundEnabled` / `SoundVolume` / `SoundFile` | 1 / 1 / parry.wav | 精防提示音 |

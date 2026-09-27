@@ -645,6 +645,40 @@ static void test_guard_alone(void) {
 
     // Movement is not consulted anywhere in this test: the function has no input
     // for sticks, which is the point (guard + walking must still cancel).
+
+    // ---- the two martial-skill (guard+X/Y/A) directions, pinned explicitly ----
+    // Direction 1 (WANTED): while a martial skill is being performed, a *later*
+    // guard-alone press must still cancel it. The skill's own attack press is long
+    // past, so it cannot be mistaken for a combination -- which also means the
+    // button may still be held (you often keep holding it).
+    pg_guard_init(&atk);
+    pg_guard_update(&atk, 1, 1000);                  // the skill's guard+X, together
+    CHECK(pg_guard_alone(1, &atk, 1000, PG_COMBO_MS, 0) == 0,
+          "the skill input itself is a combination and must not cancel");
+    // ...600ms into the skill, release and tap guard alone:
+    pg_guard_update(&atk, 1, 1600);                  // still held, but pressed long ago
+    CHECK(pg_guard_alone(1, &atk, 1600, PG_COMBO_MS, 0) == 1,
+          "a martial skill in progress must still be cancellable by a later guard press");
+    CHECK(pg_guard_alone(1, &atk, 1600, PG_COMBO_MS, 1) == 0,
+          "...unless strict mode is on, which refuses while the attack button is held");
+
+    // Direction 2 (NOT WANTED): the martial-skill input must never cancel the attack
+    // that is already running -- in either press order, and up to the window.
+    pg_guard_init(&atk);
+    pg_guard_update(&atk, 1, 1000);                  // attack button first
+    CHECK(pg_guard_alone(1, &atk, 1050, PG_COMBO_MS, 0) == 0,
+          "guard pressed 50ms after the attack button is a skill input, not a cancel");
+    pg_guard_init(&atk);
+    pg_guard_update(&atk, 1, 1100);                  // attack button 100ms after guard
+    CHECK(pg_guard_alone(1, &atk, 1000, PG_COMBO_MS, 0) == 0,
+          "guard then attack within the window is also a skill input");
+    // A wider window makes slower skill inputs count as combinations too -- the knob
+    // exists because how fast the two buttons go down is the player's own habit.
+    CHECK(pg_guard_alone(1, &atk, 1000, 250, 0) == 0, "a wider window still refuses");
+    pg_guard_init(&atk);
+    pg_guard_update(&atk, 1, 1300);                  // 300ms later: a separate input
+    CHECK(pg_guard_alone(1, &atk, 1000, PG_COMBO_MS, 0) == 1,
+          "an attack press well after the guard press is a separate action, not a skill");
 }
 
 int main(int argc, char **argv) {
