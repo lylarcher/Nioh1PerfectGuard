@@ -164,7 +164,7 @@ function New-Dist {
         @{ From = (Join-Path $ModDir 'Nioh1PerfectGuard.dll'); To = 'Nioh1PerfectGuard.dll' },
         @{ From = (Join-Path $ModDir 'Nioh1PerfectGuard.ini'); To = 'Nioh1PerfectGuard.ini' },
         @{ From = (Join-Path $ModDir 'Sounds\parry.wav');      To = 'Sounds\parry.wav' },
-        @{ From = (Join-Path $Root   'docs\QUICKSTART.md');   To = 'QUICKSTART.md' },
+        @{ From = (Join-Path $Root   'QUICKSTART.md');         To = 'QUICKSTART.md' },
         @{ From = (Join-Path $ModDir 'README_CN.md');          To = 'README_CN.md' },
         @{ From = (Join-Path $ModDir 'README_EN.md');          To = 'README_EN.md' },
         @{ From = (Join-Path $Root   'docs\验收测试说明.md');  To = 'ACCEPTANCE_TEST.md' },

@@ -4,7 +4,7 @@
 就能触发精防并拿到收益。英文版见 [`README.md`](README.md)。
 
 > **给玩家看的说明书**在 `mod/README_CN.md`、`mod/README_EN.md`、
-> `docs/QUICKSTART.md`、`docs/验收测试说明.md`（实机验收清单），这些是**随包分发**的。
+> `QUICKSTART.md`（中文一页说明，随包）、`docs/验收测试说明.md`（实机验收清单，随包），以及开发侧的 `QUICKSTART-EN.md`（英文一页说明）。
 > 本文件是**工程/开发**说明。
 
 ---

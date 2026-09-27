@@ -5,7 +5,7 @@ A mod for **Nioh 1 Complete Edition** (`nioh.exe` 1.24.8) that adds a *perfect g
 player-side rewards. Chinese version: [`README-CN.md`](README-CN.md).
 
 > **User-facing manual** (installs with the package): `mod/README_CN.md`,
-> `mod/README_EN.md`, `mod/README_EN.md`, `docs/QUICKSTART.md`, `docs/验收测试说明.md` (acceptance test).
+> `mod/README_CN.md` / `mod/README_EN.md` (full manual), `QUICKSTART.md` (Chinese one-pager, shipped) / `QUICKSTART-EN.md` (English), `docs/验收测试说明.md` (acceptance test, shipped as `ACCEPTANCE_TEST.md`).
 > This file is the **project/engineering** readme.
 
 ---

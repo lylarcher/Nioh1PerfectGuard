@@ -151,7 +151,7 @@ print("  INI keys not named in the doc : %s" % (", ".join(undocumented) or "(non
 # Every shipped knob must be documented somewhere the user will actually look.
 # Three keys were added over the project's life without either README ever naming
 # them, which leaves a working setting that nobody can discover.
-QUICKSTART = os.path.join(root, "docs", "QUICKSTART.md")
+QUICKSTART = os.path.join(root, "QUICKSTART.md")
 doc_texts = [all_text]
 if os.path.exists(QUICKSTART):
     doc_texts.append(open(QUICKSTART, encoding="utf-8").read())
