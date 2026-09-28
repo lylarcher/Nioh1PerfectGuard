@@ -2045,12 +2045,12 @@ static void lw_diag(void) {
 #define PG_LW_SCAN_MAX (PG_LW_SCAN_PAR_LEN / 4)
 #define PG_LW_SCAN_MIN_DELTA 20.0f
 
-static float g_lw_scan_prev[3][PG_LW_SCAN_MAX];
-static unsigned long long g_lw_scan_last[3][PG_LW_SCAN_MAX];
-static int g_lw_scan_valid[3];
+static float g_lw_scan_prev[4][PG_LW_SCAN_MAX];
+static unsigned long long g_lw_scan_last[4][PG_LW_SCAN_MAX];
+static int g_lw_scan_valid[4];
 static LONG g_lw_scan_log = 0;
 
-static void lw_scan_window(int w, void *base, int len, const char *tag) {
+static void lw_scan_window(int w, void *base, int len, const char *tag, float min_delta) {
     if (!base || len / 4 > PG_LW_SCAN_MAX) return;
     float cur[PG_LW_SCAN_MAX];
     SIZE_T got = 0;
@@ -2071,7 +2071,7 @@ static void lw_scan_window(int w, void *base, int len, const char *tag) {
         if (a > 20000.0f || a < -20000.0f || b > 20000.0f || b < -20000.0f) continue;
         float d = b - a;
         if (d < 0) d = -d;
-        if (d < PG_LW_SCAN_MIN_DELTA) continue;
+        if (d < min_delta) continue;
         if (now - g_lw_scan_last[w][i] < 2000) continue;        // per-offset throttle
         g_lw_scan_last[w][i] = now;
         if (g_lw_scan_log < 300) {
@@ -2091,11 +2091,16 @@ static void lw_scan(void) {
     void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
     if (!player) return;
     void *param = *(void **)((char *)player + 0x240);
-    lw_scan_window(0, param, PG_LW_SCAN_PAR_LEN, "param");
-    lw_scan_window(1, player, 0x1000, "char");
+    lw_scan_window(0, param, PG_LW_SCAN_PAR_LEN, "param", PG_LW_SCAN_MIN_DELTA);
+    lw_scan_window(1, player, 0x1000, "char", PG_LW_SCAN_MIN_DELTA);
     // The state manager ([[char+0x240]]+0x10B0) area, low threshold: a normalised gauge
     // would live in something like this and is invisible to the >=20 jump test.
-    if (param) lw_scan_window(2, (char *)param + 0x10B0, 0x200, "smgr");
+    if (param) lw_scan_window(2, (char *)param + 0x10B0, 0x200, "smgr", 0.02f);
+    // The amrita/99 cluster the static pass found: a sub-object embedded at param+0xB0.
+    // param+0xCC = sub+0x1C is the burning bar measured in game; sub+0x10/sub+0x18 are
+    // the only add-with-clamp pair (primitive 0x7AF370) = the gauge and its maximum, so
+    // the step per spirit stone is probably small and needs a low threshold.
+    if (param) lw_scan_window(3, (char *)param + 0xB0, 0x80, "lw", 0.01f);
 }
 // Called from the VEH: reads the cached judgement, then writes the gauge field.
 //
