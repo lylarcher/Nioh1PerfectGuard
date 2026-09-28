@@ -2,7 +2,7 @@
 
 > 作者：**lylarcher** ｜ 源码仓库：<https://github.com/lylarcher/Nioh1PerfectGuard>
 > 目标游戏：**仁王1 完全版**（`nioh.exe` 1.24.8）
-> 版本：`0.1.0-nioh1`
+> 版本：`0.1.1-nioh1`
 > 本文件说明**哪些已经验证过**、**修过什么**、以及**还剩哪几件事需要你实机确认**。
 
 ---
@@ -10,14 +10,14 @@
 ## 一、包内文件
 
 ```
-Nioh1PerfectGuard.dll       MOD 本体（约 224 KB）
+Nioh1PerfectGuard.dll       MOD 本体（约 237 KB）
 Nioh1PerfectGuard.ini       配置（支持游戏内热更新，改完约 1 秒生效）
 Sounds\parry.wav            精防音效（16-bit PCM / 44.1kHz）
 QUICKSTART.md               ★ 一页说明：只看这一页也能装上并用起来
 README_CN.md / README_EN.md 完整使用说明（含音效排查表、手柄布局、事件源说明）
 ACCEPTANCE_TEST.md          实机验收步骤（照着做一遍即可）
 CHANGELOG.md                本文件
-source\Nioh1PerfectGuard.c  完整源码（约 2500 行，可查阅 MOD 到底改了什么）
+source\Nioh1PerfectGuard.c  完整源码（约 3300 行，可查阅 MOD 到底改了什么）
 source\pg_logic.h           纯逻辑单一来源（窗口 / 精力补回 / 精防回血 / 事件源判定 / 去重）
 SHA256SUMS.txt              校验和
 LICENSE.txt                 PolyForm Noncommercial 1.0.0（允许非商业使用，禁止商业用途）
@@ -165,6 +165,38 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 > 会与游戏线程冲突。所以现在改成：**把时长交给引擎、MOD 不再手工移除**
 > （引擎自己的增益就是传 300/1800/2400 秒让它自己过期的）。
 
+### 2.0f 精力不返还 —— 已修复（0.1.1，由 N 网用户实测反馈定位）
+
+一位 Nexus 用户反馈："其它都正常（精防判定、回血、削敌精、音效），就是**格挡
+不返还精力**"，并附了日志。那份日志暴露了一个**真 bug，而且是我文档写错的那一条**：
+
+```
+KITRACE ki=105/105 | entry7 flag=-1 cur=0 cost=100      <- 格挡条目从未进入"已计费"状态
+PERFECT GUARD #1 via guard-flag (guard pressed 328ms ago)
+LAYOUT ... ki=71.03/105 action=3184 ...                 <- 同一毫秒：精力已经掉下来了
+KITRACE ki=97.59/105 (changed: ki)                      <- 638ms 后自己回上来的
+（整份日志里**没有一条 KIRESTORE**）
+```
+
+**根因**：扣精点不触发时模块退到"旗标事件源"，而旗标是引擎**扣完精之后**才写的
+（`LAYOUT` 与 `PERFECT GUARD` 同毫秒、里面已经是 71.03，之前是满的 105）。旧实现
+是在事件时刻**现读**精力当基准，于是基准里已经含了这次扣除 —— 损失恒为 0，
+补回一分钱都不还。也就是说：以前文档里那句"旗标源下减免靠 `KiTopUp=1`"是**错的**，
+`KiTopUp` 在那个源下等于死设置。
+
+**修法**：8ms 的输入线程持续记录精力样本（seqlock 环形缓冲），事件发生时把基准
+取自"事件前 `KiTopUpPreEventMs`（默认 100ms）内的最高值"，也就是扣精之前的值。
+新增的 `KIREF` 行打出取到的基准，`KIV-FLAG` 行打出这次实际补回了多少。
+代价如实写明：落在窗口内的无关消耗会被一并补回，窗口越短越保守（0 = 关闭）。
+
+同一份日志还让另两件事有了实机证据：`KiRecoveryMode=3` 的 `71.03 + 105/6 = 88.53`
+与 638ms 后的 `97.59` 完全吻合（补回没生效时，回精模式是唯一在工作的那条）；
+以及该用户是键鼠玩家（`key=0x02` 右键防御），`AttackButtonMask` 是手柄位掩码，
+对键鼠的组合键保护无效 —— 已知限制，尚未修。
+
+回归：新增 13 条断言（200 → **213**，含"事件前基准必须取到扣精前的值"与
+"半额减免只补一半"两条端到端用例）。
+
 ### 2.1 你在包内就能自己核对的
 
 | 做法 | 看什么 |
@@ -187,9 +219,9 @@ LAYOUT player=0x... hp=537/880 ki=77.73/98 action=3184 frame=5
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
 | 锚点期望字节与解密镜像逐字节一致 | `python tools\test_anchors.py ..` | **4/4 一致**；输入槽推导得 `0x1B78658`，与独立已知值相符 |
-| 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **200 条断言全过** |
+| 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **213 条断言全过** |
 | INI 编码与取值边界 + **内置默认值必须等于随包 INI** | `python tools\test_ini_encodings.py ..\mod` | **6/6** |
-| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **48/48 标记；112 条日志 0 条未解释** |
+| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **50/50 标记；114 条日志 0 条未解释** |
 | 交付文档只引用真实存在的文件 | `python tools\test_doc_paths.py ..` | 通过 |
 | 导出表 | `python tools\list_exports.py ..\mod\Nioh1PerfectGuard.dll` | 12 个 `PG_*` |
 | **测试过的算术 == 发货的算术** | `python tools\test_logic_digest.py ..` | 两个构建的数值指纹一致 |

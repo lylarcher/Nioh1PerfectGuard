@@ -35,7 +35,7 @@
 // tests cannot drift away from what ships.
 #include "pg_logic.h"
 
-#define MOD_VERSION "0.1.0-nioh1"
+#define MOD_VERSION "0.1.1-nioh1"
 #define MAX_TARGETS 4
 #define MAX_ARMED 8192
 #define LOG_CAP (MAX_PATH * 2)
@@ -74,7 +74,7 @@ static int g_recovery_log = 0;
 static unsigned long long g_last_ctx = 0;
 static void apply_enemy_effects(void *ctx);
 static void apply_cancel_recovery(void *player);
-static void ki_snapshot(void);
+static void ki_snapshot(int from_flag);
 static void ki_restore_tick(void);
 static void ki_verdict(void);
 
@@ -93,7 +93,7 @@ static int reward_slot_free(void);
 static void state_save(const char *what);
 static void state_load(void);
 static int g_costsite_dead;          // defined with the event-source state
-static void perfect_guard_rewards(void);
+static void perfect_guard_rewards(int from_flag);
 static int entry_belongs_to_player(unsigned long long entry);
 static HANDLE g_sound_event = NULL; // VEH signals this; the audio thread plays
 static HANDLE g_cfg_mutex = NULL;   // serialises config_load (shared INI buffer)
@@ -110,6 +110,12 @@ typedef struct {
     // rewards
     int ki_reduction_percent;      // 0..100 scale applied to xmm1 at the cost site
     int ki_topup;                  // 1 = also top the visible Ki field back up
+    // How far back the pre-event Ki reference looks (ms). The flag event source
+    // fires *after* the engine charged the Ki, so a reference sampled at event time
+    // already contains the charge and the top-up has nothing to hand back -- the
+    // defect a user reported. With this window the reference comes from a rolling
+    // 8ms sample ring instead (pg_ki_ref). 0 disables it (old behaviour).
+    int ki_topup_preevent_ms;
     int ki_recovery_mode;          // 0 none, 1 refund the guard cost, 2 fixed
     float fixed_recovery;
     // Restoring the player's own HP (the "体力" reward). Modes mirror the Ki ones
@@ -194,6 +200,9 @@ static void config_defaults(Config *c) {
     c->cancel_recovery_frames = 30.0f;
     c->ki_reduction_percent = 100;
     c->ki_topup = 1;               // also write the visible Ki field (see the INI)
+    // 100ms: the charge and the guard flag land in the same frame, while a spend
+    // from an earlier attack is 250ms+ away in practice (see pg_ki_ref).
+    c->ki_topup_preevent_ms = 100;
     c->ki_recovery_mode = 3;       // Balanced: one sixth of maximum Ki
     c->fixed_recovery = 50.0f;
     // HP restore is on by default because it was asked for as a default: 3% of
@@ -397,6 +406,8 @@ static int config_load_inner(int first_time) {
     c.ki_reduction_percent = ini_int("KiDamageReductionPercent",
                                      c.ki_reduction_percent, 0, 100, &ok);
     c.ki_topup = ini_int("KiTopUp", c.ki_topup, 0, 1, &ok);
+    c.ki_topup_preevent_ms = ini_int("KiTopUpPreEventMs", c.ki_topup_preevent_ms,
+                                     0, PG_KI_REF_MAX_SAMPLES * 8 - 100, &ok);
     c.ki_recovery_mode = ini_int("KiRecoveryMode", c.ki_recovery_mode, 0, 3, &ok);
     c.fixed_recovery = ini_float("FixedRecovery", c.fixed_recovery, 0.0f, 100000.0f, &ok);
     c.hp_recovery_mode = ini_int("HpRecoveryMode", c.hp_recovery_mode, 0, 3, &ok);
@@ -1902,7 +1913,7 @@ static void action_cancel_followup(void) {
     }
 }
 
-static void perfect_guard_rewards(void) {
+static void perfect_guard_rewards(int from_flag) {
     InterlockedIncrement(&g_perfect);
     if (g_perfect <= 60) {
         log_line("PERFECT GUARD #%ld via %s (guard pressed %llums ago)",
@@ -1914,7 +1925,7 @@ static void perfect_guard_rewards(void) {
     if (g_cfg.sound_enabled && g_sound_event) SetEvent(g_sound_event);
 
     void *player_now = g_base ? *(void **)(ULONG_PTR)(g_base + 0x18A0490) : NULL;
-    ki_snapshot();
+    ki_snapshot(from_flag);
     apply_hp_restore();
     // Timers only: the engine calls happen on our own thread (see the timed-buff
     // section). Never call into the engine from this exception handler.
@@ -2007,7 +2018,7 @@ static void on_guard_cost(CONTEXT *c) {
     }
     if (!reward_slot_free()) return;   // this block was already rewarded elsewhere
 
-    perfect_guard_rewards();
+    perfect_guard_rewards(0);
     InterlockedIncrement(&g_rewards);
 
     // xmm1 holds the guard Ki cost; scale it by the configured reduction.
@@ -2167,9 +2178,12 @@ static int effective_event_source(void) {
     if (!g_auto_notice) {
         g_auto_notice = 1;
         log_line("NOTICE: %s so the mod is using the flag event source. Rewards work, "
-                 "but the guard cost cannot be scaled at the subtract site, so "
-                 "reduction relies on KiTopUp=1 (keep it on). It will switch back "
-                 "automatically if a guard-cost event ever appears.",
+                 "but the guard cost cannot be scaled at the subtract site -- and "
+                 "because this source fires *after* the engine charged the Ki, the "
+                 "Ki reduction relies on the top-up measuring against a value from "
+                 "before the charge (KiTopUp=1, KiTopUpPreEventMs>0). A KIV-FLAG "
+                 "line reports what it found. It will switch back automatically if "
+                 "a guard-cost event ever appears.",
                  g_costsite_dead
                      ? "a previous session established that the guard-cost event never "
                        "fires on this build,"
@@ -2241,11 +2255,13 @@ static void on_guard_flag_event(CONTEXT *c) {
     if (!reward_slot_free()) return;   // this block was already rewarded elsewhere
 
     // No entry and no cost are visible here, so the charge is recorded as unknown:
-    // that disables the refund cap (harmless) and makes the KIV verdict skip this
-    // block, which is correct -- KIV is a question about the cost site.
+    // that disables the refund cap (harmless) and makes the KIV verdict skip the
+    // cost-site models, which is correct -- KIV is a question about the cost site.
+    // The Ki reference, however, must come from *before* the charge this event
+    // reports, so the snapshot uses the rolling ring (see pg_ki_ref).
     g_last_cost = 0.0f;
     g_last_cost_block = g_rewards + 1;
-    perfect_guard_rewards();
+    perfect_guard_rewards(1);
     InterlockedIncrement(&g_rewards);
     apply_ki_recovery(0, 0.0f);
     apply_enemy_effects((void *)(ULONG_PTR)ctx);
@@ -2439,8 +2455,82 @@ static int g_ki_log = 0;
 static float g_ki_cost = -1.0f;
 static long g_ki_block = 0;
 static int g_ki_verdicts = 0;
+static int g_ki_flag_verdicts = 0;
+static float g_ki_live = -1.0f;      // Ki at the event, before any reference work
+static int g_ki_ref_log = 0;
 
-static void ki_snapshot(void) {
+// ------------------------------------------------ rolling pre-event Ki samples --
+// The flag event source fires *after* the engine charged the Ki, so a reference
+// read at event time already contains the charge and the top-up hands nothing back
+// (pg_ki_ref explains the failure and the fix). The 8ms input tick therefore keeps
+// a ring of samples and the reference is the highest value in a short window before
+// the event.
+//
+// The writer is the input thread and the reader is the exception handler on a game
+// thread, so this is a seqlock: the writer bumps the sequence before and after
+// touching the ring; the reader accepts its copy only if the sequence did not
+// change. A torn read is not an error, it just falls back to the live value for
+// that block -- and the reader must never spin, because it runs inside VEH.
+#define PG_KI_RING 64                     // 64 * 8ms ~= 512ms of history
+static PgKiSample g_ki_ring[PG_KI_RING];
+static volatile LONG g_ki_ring_seq = 0;
+static volatile LONG g_ki_ring_head = 0;
+
+static void ki_ring_push(float ki, unsigned long long ms) {
+    if (!(ki >= 0.0f) || ki > 100000.0f) return;
+    LONG head = InterlockedCompareExchange(&g_ki_ring_head, 0, 0);
+    InterlockedIncrement(&g_ki_ring_seq);              // odd: update in progress
+    PgKiSample *slot = &g_ki_ring[head & (PG_KI_RING - 1)];
+    slot->ki = ki;
+    slot->ms = ms ? ms : 1;                            // 0 marks an unwritten slot
+    InterlockedIncrement(&g_ki_ring_head);             // publish, data already in
+    InterlockedIncrement(&g_ki_ring_seq);              // even: stable again
+}
+
+// Copy the newest samples out, newest first. Bounded work, no waiting.
+static int ki_ring_copy(PgKiSample *out, int cap) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        LONG s1 = InterlockedCompareExchange(&g_ki_ring_seq, 0, 0);
+        if (s1 & 1) continue;                          // writer mid-update
+        LONG head = InterlockedCompareExchange(&g_ki_ring_head, 0, 0);
+        int n = 0;
+        for (int i = 0; i < cap; ++i) {
+            int idx = (int)((head - 1 - i) % PG_KI_RING);
+            if (idx < 0) idx += PG_KI_RING;
+            PgKiSample s = g_ki_ring[idx];
+            if (s.ms == 0) break;                      // the rest is older than that
+            out[n++] = s;
+        }
+        if (InterlockedCompareExchange(&g_ki_ring_seq, 0, 0) == s1) return n;
+    }
+    return 0;
+}
+
+// The Ki this block is measured against. `live` is used whenever the window is
+// disabled, the ring is empty, or a writer was caught mid-update.
+static float ki_pre_event_ref(float live) {
+    if (g_cfg.ki_topup_preevent_ms <= 0) return live;
+    PgKiSample snaps[PG_KI_REF_MAX_SAMPLES];
+    int n = ki_ring_copy(snaps, PG_KI_REF_MAX_SAMPLES);
+    return pg_ki_ref(snaps, n, now_ms(), (unsigned long long)g_cfg.ki_topup_preevent_ms,
+                     live);
+}
+
+// One sample per input tick, so the ring always holds the value from just before
+// whatever happens next.
+static void ki_ring_tick(void) {
+    if (!g_base || g_cfg.ki_topup_preevent_ms <= 0) return;
+    void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+    if (!player) return;
+    void *param = *(void **)((char *)player + 0x240);
+    if (!param) return;
+    ki_ring_push(*(float *)((char *)param + 0x40), now_ms());
+}
+
+// `from_flag` selects the reference rule: the flag source fires after the charge
+// and needs the pre-event value, the cost source fires before it and must use the
+// live one (a window there would re-refund a spend this block did not cause).
+static void ki_snapshot(int from_flag) {
     if (!g_base) return;
     void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
     if (!player) return;
@@ -2448,10 +2538,19 @@ static void ki_snapshot(void) {
     if (!param) return;
     float ki = *(float *)((char *)param + 0x40);
     if (ki >= 0.0f && ki < 100000.0f) {
+        g_ki_live = ki;
+        float ref = from_flag ? ki_pre_event_ref(ki) : ki;
+        if (ref > ki && g_ki_ref_log < 20) {
+            log_line("KIREF pre-event reference %.5g vs live %.5g (window %dms): the "
+                     "flag source fires after the charge, so the top-up is measured "
+                     "against the value from before it",
+                     ref, ki, g_cfg.ki_topup_preevent_ms);
+            g_ki_ref_log++;
+        }
         // The charge is read at the subtract site before the gate is evaluated, so
         // it is already available here; 0 means "not captured", which only disables
         // the refund cap rather than breaking anything.
-        pg_ki_begin(&g_ki, ki, g_last_cost > 0.0f ? g_last_cost : 0.0f, now_ms());
+        pg_ki_begin(&g_ki, ref, g_last_cost > 0.0f ? g_last_cost : 0.0f, now_ms());
         g_ki_cost = g_last_cost;      // charge this block was told to apply
         g_ki_block = g_last_cost_block;
         g_ki_restore_until = now_ms() + 400;
@@ -2495,8 +2594,26 @@ static const char *kiv_model_name(int model) {
 }
 
 static void ki_verdict(void) {
+    if (g_ki_cost <= 0.0f) {
+        // The flag event source: no charge was ever visible, so the cost-site
+        // models say nothing about it. What still has to be reported is whether the
+        // pre-event reference found a drop and the top-up handed it back -- that is
+        // the question a user's report raised, and it used to be answered with
+        // silence, which read as "the setting is broken" rather than "look here".
+        if (g_ki_flag_verdicts >= 20) return;
+        float l = pg_ki_attributed(&g_ki);
+        if (l <= 0.0f) return;               // no drop was attributed: nothing to say
+        unsigned long long delay =
+            g_ki.first_loss_ms ? g_ki.first_loss_ms - g_ki.block_ms : 0;
+        log_line("KIV-FLAG block #%ld reference R=%.5g live at event %.5g attributed "
+                 "loss L=%.5g handed back %.5g/%d%% first loss after %llums -> the "
+                 "flag source saw the drop the engine applied before the event",
+                 g_ki_block, g_ki.snapshot, g_ki_live, l, g_ki.given,
+                 g_cfg.ki_reduction_percent, delay);
+        g_ki_flag_verdicts++;
+        return;
+    }
     if (g_ki_verdicts >= 40) return;
-    if (g_ki_cost <= 0.0f) return;
     float d = g_ki_cost;
     // Classify on the *attributed* loss (the part seen within PG_KI_ATTR_MS and
     // capped at the known charge). Using the whole-window peak would let an
@@ -2900,6 +3017,9 @@ static DWORD WINAPI input_thread(LPVOID param) {
         poll_guard_button();
         action_cancel_followup();
         ki_restore_tick();
+        // After the restore, so the ring records the value the player will actually
+        // have if a block lands before the next tick.
+        ki_ring_tick();
         // Owns the timed-buff watchdog: applying/removing engine state happens
         // here and nowhere else, never in the exception handler.
         buff_watchdog_config();
@@ -3153,14 +3273,15 @@ __declspec(dllexport) const char *PG_SelfTest(void) {
 
     snprintf(out, sizeof(out),
              "config_rc=%d enabled=%d window=%d cancel=%d cancelframes=%g "
-             "reduction=%d topup=%d recovery=%d fixed=%g gate=%d mask=0x%04X "
+             "reduction=%d topup=%d preevent=%d recovery=%d fixed=%g gate=%d mask=0x%04X "
              "padslot=%d vk=%d learn=%d trace=%d enemyki=%g enemyhp=%g "
              "sound_enabled=%d vol=%.2f file=%s hotkey=%d diag=%d eventsrc=%d "
              "hpmode=%d hppct=%g hpfixed=%g spdpct=%g spdms=%d dmgcutpct=%g "
              "dmgcutms=%d armor=%d armorms=%d | wav=%d audio=%d",
              rc, g_cfg.enabled, g_cfg.window_ms, g_cfg.cancel_recovery,
              (double)g_cfg.cancel_recovery_frames, g_cfg.ki_reduction_percent,
-             g_cfg.ki_topup, g_cfg.ki_recovery_mode, (double)g_cfg.fixed_recovery,
+             g_cfg.ki_topup, g_cfg.ki_topup_preevent_ms, g_cfg.ki_recovery_mode,
+             (double)g_cfg.fixed_recovery,
              g_cfg.gate_timely, g_cfg.guard_button_mask, g_cfg.pad_slot,
              g_cfg.guard_key_vk, g_cfg.learn_buttons, g_cfg.ki_trace,
              (double)g_cfg.enemy_ki_damage, (double)g_cfg.enemy_hp_damage,

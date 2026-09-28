@@ -140,6 +140,57 @@ static inline float pg_ki_step(PgKiRestore *s, float now_value,
     return target;
 }
 
+// ---------------------------------------------------- the pre-event reference --
+// Which Ki value a block is measured against.
+//
+// The cost site fires *before* the engine subtracts, so there the live value is
+// the right reference. The flag site fires *after*: the engine has already charged
+// by the time the flag is written. A field log from a real user shows it directly
+// -- `ki=71.03/105` in the very same millisecond as the perfect guard, down from a
+// full 105. Sampling at event time therefore produces a reference that already
+// contains the charge, the measured "loss" is zero, and the top-up does nothing at
+// all while still looking configured. That is exactly what was reported: every
+// other reward worked, and Ki was never refunded.
+//
+// So the reference comes from a short ring of samples kept by the 8ms input tick:
+// the *highest* value seen within `window_ms` before the event, never below the
+// live value.
+//
+// Why the max rather than the newest sample: the tick is 8ms and the charge can
+// land anywhere inside the window, so the newest sample may already be post-charge.
+// The max over a window that is short relative to player input (100ms by default --
+// the charge and the flag land in the same frame) is the value from before the
+// charge, while a spend from an earlier attack, 250ms+ away in practice, stays out.
+//
+// The honest failure mode: a spend that lands *inside* the window but is unrelated
+// to the block (attack into a block within 100ms) is refunded too. That is what the
+// window length is for, and setting it to 0 turns the whole mechanism off.
+typedef struct {
+    unsigned long long ms;   // 0 = slot never written
+    float ki;
+} PgKiSample;
+
+// The reader in the exception handler copies at most this many samples; the writer
+// keeps a ring of the same size (64 * 8ms ~= 512ms), which is what bounds the
+// usable window: a longer KiTopUpPreEventMs than the ring covers cannot be served.
+#define PG_KI_REF_MAX_SAMPLES 64
+
+static inline float pg_ki_ref(const PgKiSample *s, int n, unsigned long long now,
+                             unsigned long long window_ms, float live) {
+    float best = live;
+    if (window_ms == 0) return best;              // 0 = reference disabled
+    int cap = n < PG_KI_REF_MAX_SAMPLES ? n : PG_KI_REF_MAX_SAMPLES;
+    for (int i = 0; i < cap; ++i) {
+        if (s[i].ms == 0) continue;               // unwritten slot
+        if (s[i].ms > now) continue;              // clock went backwards: ignore
+        if (now - s[i].ms > window_ms) continue;  // outside the window
+        // NaN fails the first test, so no separate isnan() is needed.
+        if (!(s[i].ki >= 0.0f) || s[i].ki > 100000.0f) continue;
+        if (s[i].ki > best) best = s[i].ki;
+    }
+    return best;
+}
+
 // ---------------------------------------------------------------------------
 // Restoring the player's HP on a perfect guard.
 //
@@ -693,6 +744,30 @@ static inline unsigned int pg_logic_digest(void) {
                     h = pg_fold_float(h, v);
                     h = pg_fold_float(h, s.given);
                 }
+    }
+
+    // 3b. pre-event reference selection. A sample set shaped like the reported
+    //     session -- full, then already charged by the time the flag is written --
+    //     must resolve to the pre-charge value, and a disabled window must fall
+    //     back to the live value.
+    {
+        const PgKiSample ring[5] = {
+            { 2050, 105.0f },   // newest first, the order the reader copies in
+            { 2042, 71.03f },   // the charge already applied: 71.03 of 105
+            { 2034, 105.0f },
+            { 1990, 105.0f },
+            { 1500, 105.0f },
+        };
+        const unsigned long long windows[4] = {0, 16, 100, 400};
+        const float lives[3] = {71.03f, 105.0f, -1.0f};
+        for (int wi = 0; wi < 4; ++wi)
+            for (int li = 0; li < 3; ++li) {
+                h = pg_fold_float(h, pg_ki_ref(ring, 5, 2050, windows[wi], lives[li]));
+                h = pg_fold_float(h, pg_ki_ref(ring, 0, 2050, windows[wi], lives[li]));
+            }
+        // an unwritten slot, an absurd value and a backwards clock are all ignored
+        const PgKiSample junk[3] = { { 0, 500.0f }, { 2049, 999999.0f }, { 4000, 900.0f } };
+        h = pg_fold_float(h, pg_ki_ref(junk, 3, 2050, 100, 42.0f));
     }
 
     // 4. verdict classification over the same grid

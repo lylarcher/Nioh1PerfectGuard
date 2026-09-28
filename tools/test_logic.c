@@ -235,6 +235,83 @@ static void test_attribution(void) {
     }
 }
 
+// The flag event source fires *after* the engine charged the Ki, so the reference a
+// block is measured against has to come from before the charge. These cases are
+// shaped like the session that exposed it: 105/105 full, then 71.03 in the same
+// millisecond as the perfect guard, with no KIRESTORE line at all.
+static void test_ki_ref(void) {
+    printf("pre-event Ki reference\n");
+    const PgKiSample ring[4] = {
+        { 2050, 71.03f },   // newest: the charge is already applied
+        { 2042, 105.0f },   // the tick before it: the full bar
+        { 2034, 105.0f },
+        { 1900, 105.0f },   // 150ms before the event
+    };
+
+    CHECK(pg_ki_ref(ring, 4, 2050, 100, 71.03f) == 105.0f,
+          "the reference must come from before the charge, got %g",
+          pg_ki_ref(ring, 4, 2050, 100, 71.03f));
+    CHECK(pg_ki_ref(ring, 4, 2050, 100, 120.0f) == 120.0f,
+          "the reference is never below the live value");
+    CHECK(pg_ki_ref(ring, 4, 2050, 4, 71.03f) == 71.03f,
+          "samples outside the window are ignored, got %g",
+          pg_ki_ref(ring, 4, 2050, 4, 71.03f));
+    CHECK(pg_ki_ref(ring, 4, 2050, 0, 71.03f) == 71.03f,
+          "window 0 uses the live value (the old behaviour)");
+    CHECK(pg_ki_ref(ring, 0, 2050, 100, 71.03f) == 71.03f,
+          "an empty ring uses the live value");
+    // The reader hands over a full buffer; slots the writer never filled (ms == 0)
+    // must be ignored rather than adopted as a huge Ki value.
+    {
+        PgKiSample big[PG_KI_REF_MAX_SAMPLES];
+        for (int i = 0; i < PG_KI_REF_MAX_SAMPLES; ++i) {
+            big[i].ms = 0;
+            big[i].ki = 999.0f;
+        }
+        big[0].ms = 2050; big[0].ki = 71.03f;
+        big[1].ms = 2042; big[1].ki = 105.0f;
+        CHECK(pg_ki_ref(big, PG_KI_REF_MAX_SAMPLES, 2050, 100, 71.03f) == 105.0f,
+              "unwritten slots in a full buffer are ignored, got %g",
+              pg_ki_ref(big, PG_KI_REF_MAX_SAMPLES, 2050, 100, 71.03f));
+    }
+
+    // The trade-off the window length controls: a spend from an earlier attack is
+    // only adopted if the window is long enough to reach back to it.
+    const PgKiSample late[3] = { { 2050, 71.03f }, { 1890, 45.0f }, { 1880, 105.0f } };
+    CHECK(pg_ki_ref(late, 3, 2050, 100, 71.03f) == 71.03f,
+          "a spend 160ms before the block must not be adopted, got %g",
+          pg_ki_ref(late, 3, 2050, 100, 71.03f));
+    CHECK(pg_ki_ref(late, 3, 2050, 200, 71.03f) == 105.0f,
+          "a wider window does reach it -- that is the documented trade-off");
+
+    // garbage: unwritten slots, absurd values, a backwards clock, a negative Ki
+    const PgKiSample junk[4] = { { 0, 900.0f }, { 2049, 999999.0f },
+                                 { 4000, 900.0f }, { 2049, -5.0f } };
+    CHECK(pg_ki_ref(junk, 4, 2050, 100, 42.0f) == 42.0f,
+          "invalid samples are ignored, got %g", pg_ki_ref(junk, 4, 2050, 100, 42.0f));
+
+    // End to end over the reported numbers: with the flag source's reference the
+    // bar is back at the pre-charge value on the first tick after the event.
+    {
+        PgKiRestore s;
+        float ref = pg_ki_ref(ring, 4, 2050, 100, 71.03f);
+        pg_ki_begin(&s, ref, 0.0f, 2050);          // no charge is visible here
+        float v = pg_ki_step(&s, 71.03f, 100, 2058);
+        CHECK(v > 104.9f && v <= 105.0f, "a full reduction reaches %g, got %g", ref, v);
+        CHECK(s.given > 33.9f && s.given < 34.0f,
+              "and hands back exactly the drop, got %g", s.given);
+        CHECK(pg_ki_attributed(&s) > 33.9f, "the drop is attributed, got %g",
+              pg_ki_attributed(&s));
+    }
+    // Half the reduction: the block costs half of what the engine charged.
+    {
+        PgKiRestore s;
+        pg_ki_begin(&s, 105.0f, 0.0f, 2050);
+        float v = pg_ki_step(&s, 71.03f, 50, 2058);
+        CHECK(v > 88.0f && v < 88.1f, "50%% leaves half the drop, got %g", v);
+    }
+}
+
 static void test_throttle(void) {
     printf("diagnostic throttle\n");
     PgThrottle t;
@@ -740,6 +817,7 @@ int main(int argc, char **argv) {
     test_dedupe();
     test_restore();
     test_attribution();
+    test_ki_ref();
     test_hp_restore();
     test_buff();
     test_guard_alone();

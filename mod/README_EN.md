@@ -1,4 +1,4 @@
-# Nioh 1 · Perfect Guard — v0.1.0
+# Nioh 1 · Perfect Guard — v0.1.1
 
 Timed-guard rewards for *Nioh: Complete Edition* (`nioh.exe` 1.24.8), in the spirit
 of Nioh 3's Guard Parry.
@@ -106,6 +106,7 @@ apply **within about a second** while the game is running.
 | `KiTrace` | 1 | Sample both candidate Ki fields (temporary diagnostic) |
 | `KiDamageReductionPercent` | 100 | Guard Ki cost reduction, 0–100. 100 = free blocking |
 | `KiTopUp` | 1 | Also top the visible Ki field back up — see "two reduction mechanisms" below. **Leave at 1** |
+| `KiTopUpPreEventMs` | 100 | How far back (ms) the top-up's reference Ki value is taken from (0 = disabled). The flag source fires *after* the charge, so a wrong reference refunds nothing — see below |
 | `KiRecoveryMode` | 3 | 0 none / 1 refund cost / 2 fixed / **3 one sixth of max Ki** |
 | `FixedRecovery` | 50 | Used by mode 2 |
 | `HpRecoveryMode` | 1 | **HP restore on a perfect guard**: 0 off / **1 percent of max HP (default)** / 2 fixed / 3 both |
@@ -193,10 +194,29 @@ Two different moments can mean "the player blocked". `BlockEventSource` picks on
 
 1. **scale** the amount the engine is about to subtract at the cost site — only
    available when the source is `0` (or auto decided the cost site works);
-2. **top up** the visible Ki by `reduction%` of the loss afterwards — controlled by
-   `KiTopUp`, and effective with **either** source.
+2. **top up** the visible Ki by `reduction%` of the loss — controlled by `KiTopUp`.
 
-So with the flag source, reduction depends entirely on `KiTopUp=1` (on by default).
+**Both depend on the order of events.** The cost site fires *before* the engine
+subtracts, so there the live value is the correct reference. The flag site fires
+*after*: in a real session the log showed `ki=71.03/105` in the very same
+millisecond as the perfect guard, down from a full 105. A reference read at event
+time therefore already contains the charge, the measured loss is zero, and the
+top-up silently does nothing — which is exactly what a user reported ("everything
+works except the Ki refund").
+
+So under the flag source the reference comes from **`KiTopUpPreEventMs`** (100ms by
+default): the 8ms input tick keeps a ring of samples and the reference is the
+highest value seen inside that window, i.e. from before the charge. In the log:
+
+- `KIREF pre-event reference 105 vs live 71.03` → the reference is right;
+- `KIV-FLAG ... handed back 33.97/100%` → that 33.97 was actually given back.
+
+Trade-off: an unrelated spend that lands inside the window is refunded too — and the
+likeliest case is this mod's own cancel playstyle (attack, then press guard to cancel
+it; the cost is charged the moment the swing starts). If the two are closer together
+than the window, that swing's Ki is refunded as well. `KIREF` prints the reference it
+adopted: if it is clearly above your real Ki before the block, that is what happened —
+lower `KiTopUpPreEventMs` (e.g. 50) or set it to `0`.
 
 ### Encoding
 
@@ -358,6 +378,12 @@ act on yourself, with no new build:
 
 Switching the top-up off does not cost you the diagnosis: the mod keeps sampling
 and keeps printing `KIV`.
+
+> **`KIV` does not apply under the flag source** (no charge is visible there) — look
+> at `KIV-FLAG` instead: `reference` is the pre-charge value and `handed back` is
+> what was actually refunded. If a block produces neither `KIREF` nor `KIV-FLAG`,
+> the charge landed outside the `KiTopUpPreEventMs` window; raise it (see the
+> trade-off above).
 
 The first ten perfect guards each produce one line — no arithmetic required.
 
