@@ -2052,12 +2052,17 @@ static void lw_plan_on_guard(void) {
     float add = (float)pct / 100.0f * m;
     float nv = c + add;
     if (nv > m) nv = m;
-    if (nv <= c) return;                               // already full
-    *cur = nv;
-    g_lw_wrote_val = nv;
-    g_lw_wrote_max = m;
-    g_lw_back = 0;
-    InterlockedExchange(&g_lw_wrote, 1);
+    if (nv > c) {
+        *cur = nv;
+        g_lw_wrote_val = nv;
+        g_lw_wrote_max = m;
+        g_lw_back = 0;
+        InterlockedExchange(&g_lw_wrote, 1);
+    }
+    // Always report, even when the gauge was already full (`x -> x`): a silent skip is
+    // indistinguishable from "the feature never fired", and that ambiguity cost a whole
+    // test session -- the log showed zero writes because every guard happened while the
+    // gauge was at maximum.
     if (g_lw_log < 30) {
         log_line("LW gauge: +%ld%% %g -> %g (max %g, in 99 state=%ld)", pct, c, nv, m,
                  (long)in_lw);
