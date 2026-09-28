@@ -134,6 +134,8 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **精防后移速增益**（0 = 关）。想启用设成 4。⚠ 本轮默认关：这是唯一调用游戏代码的功能，尚未实机验证 |
 | `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **精防后承受伤害降低**（0 = 关）。想启用设成 4 |
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **霸体**（已决定不使用，见下） |
+| `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` | **0** / 10 | **九十九槽（精华量表 / 守护灵槽）积累**：每次精防加 N% 槽，默认关、默认 10% |
+| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **0** / 10 | **九十九状态中续烧条**：在九十九状态下每次精防续 N%，默认关、默认 10% |
 | `CancelActionOnGuard` | **1** | **单按防御键取消当前动作**（0 = 关）：攻击/武技、喝药、上阴阳符、上咒术忍术、丢道具都算。防御+X/Y/A 这类组合键**不算**；移动不影响 |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | 哪些键算攻击键 / 与防御键相隔多少毫秒内算“组合键” |
 | `CancelActionStrictHold` / `CancelActionFrames` / `CancelActionRecentMs` | 0 / 30 / **0** | 严格模式（按着就不取消）/ 动画帧推进量 / **0 = 任何防御按下都取消**（不区分精防与普通防御）|
@@ -144,6 +146,31 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `KiTrace` | 1 | 诊断：持续采样两个候选精力字段（**验收完可以改 0**） |
 | `BlockEventSource` | 2 | **哪个事件代表"玩家格挡成功"**：`2`=自动（推荐）/ `0`=只用扣精点 / `1`=只用旗标点。见下节 |
 | `DiagDisable` | 0 | **诊断位掩码，平时保持 0**：`1`=不装断点 / `2`=不启动输入线程 / `4`=开启"滚动重装"（**已知会弄崩游戏**）/ `8`=不跑自检 |
+
+### 九十九槽（精华量表 / 守护灵槽）两个开关
+
+| 开关 | 何时生效 | 默认 |
+| --- | --- | --- |
+| `LivingWeaponGaugeOnGuard`（+ `LivingWeaponGaugePercent`） | **不在**九十九状态时，每次精防给量表加 N% | 关 / 10 |
+| `LivingWeaponExtendOnGuard`（+ `LivingWeaponExtendPercent`） | **在**九十九状态时，每次精防续 N%（烧条） | 关 / 10 |
+
+机制上它们不是"改字段"，而是**调用引擎自己的那个状态对象**
+（`Character::AddStateObjectAmritaGaugeUp`，构造函数 `0x79E880`，状态 id `0x20`）：
+它的 apply 就是 `gauge = min(gauge + 幅度, 1.0)`，量表 0～1 归一化，所以
+"10% 槽"＝幅度 `0.10`，上限由引擎夹紧。**是否在九十九状态**由引擎自己那个激活标志
+（`Player::SetTsukumoWeaponActiveFlag` 写的字节）判断；标志读不到时会回退到"攒槽"那条，
+所以标志读错也**不会**让攒槽静默失效。
+
+日志里每次调用都会写明：
+
+```
+LW engine: the 99-gauge constructor at 0x... stamps state id 0x20 in its first 128 bytes
+LW gauge: +10% via AmritaGaugeUp state 0x... (in 99 state=0, add()=1, container check: present)
+```
+
+`add()=1` 且 `present` ＝ 引擎收下了这个状态对象。与限时增益一样，这条路会调用游戏
+代码（由 `DiagDisable` 位 16 统一关闭），并且**永不调用"移除"**（那条路实测会崩），
+时长交给引擎自己过期。
 
 ### 事件源会自动记住结论（Nioh1PerfectGuard.state）
 

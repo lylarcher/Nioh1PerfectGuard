@@ -312,6 +312,33 @@ static void test_ki_ref(void) {
     }
 }
 
+// The 99 gauge: two switches, one engine write, and a flag reading that may fail.
+static void test_lw_plan(void) {
+    printf("99 gauge plan (精华量表)\n");
+    // accumulate only
+    CHECK(pg_lw_plan(1, 10, 0, 10, 0) == 10, "accumulate when not in the 99 state");
+    CHECK(pg_lw_plan(1, 25, 0, 10, 0) == 25, "accumulate uses its own percentage");
+    // extend only
+    CHECK(pg_lw_plan(0, 10, 1, 20, 1) == 20, "extend when in the 99 state");
+    CHECK(pg_lw_plan(0, 10, 1, 20, 0) == 0, "extend does nothing outside the state");
+    // both: the phase picks which one, and the extend switch wins inside the state
+    CHECK(pg_lw_plan(1, 10, 1, 20, 1) == 20, "inside the state the extend value applies");
+    CHECK(pg_lw_plan(1, 10, 1, 20, 0) == 10, "outside it the accumulate value applies");
+    // the flag cannot be read: must not silently disable the accumulate switch
+    CHECK(pg_lw_plan(1, 10, 1, 20, -1) == 10, "unknown flag falls back to accumulate");
+    CHECK(pg_lw_plan(1, 10, 0, 20, -1) == 10, "unknown flag with accumulate on");
+    // a misread "in state" must not silently disable accumulate either: with the
+    // extend switch off it is ignored entirely
+    CHECK(pg_lw_plan(1, 10, 0, 20, 1) == 10, "extend off => the flag cannot disable accumulate");
+    // everything off, or a 0 percentage, adds nothing
+    CHECK(pg_lw_plan(0, 10, 0, 20, 1) == 0, "both switches off adds nothing");
+    CHECK(pg_lw_plan(1, 0, 0, 0, 0) == 0, "a zero percentage adds nothing");
+    // out-of-range input cannot exceed the gauge
+    CHECK(pg_lw_plan(1, 250, 0, 0, 0) == 100, "percent is clamped to 100");
+    CHECK(pg_lw_plan(0, 0, 1, 250, 1) == 100, "extend percent is clamped too");
+    CHECK(pg_lw_plan(1, -5, 0, 0, 0) == 0, "a negative percentage adds nothing");
+}
+
 static void test_throttle(void) {
     printf("diagnostic throttle\n");
     PgThrottle t;
@@ -818,6 +845,7 @@ int main(int argc, char **argv) {
     test_restore();
     test_attribution();
     test_ki_ref();
+    test_lw_plan();
     test_hp_restore();
     test_buff();
     test_guard_alone();

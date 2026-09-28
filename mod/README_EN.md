@@ -115,6 +115,8 @@ apply **within about a second** while the game is running.
 | `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **Move-speed buff after a perfect guard** (0 = off). Set to 4 to enable. ⚠ Off this round: it is the only feature that calls game code and it is not yet verified in game |
 | `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **Damage-taken reduction after a perfect guard** (0 = off). Set to 4 to enable |
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **Armour** (dropped by decision, see below) |
+| `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` | **0** / 10 | **99 gauge (amrita / guardian-spirit gauge) accumulation**: +N% per perfect guard; off by default, 10% when on |
+| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **0** / 10 | **Extend the burning gauge while the 99 state is active**: +N% per perfect guard; off by default, 10% when on |
 | `CancelActionOnGuard` | **1** | **A pure guard press cancels the current action** (0 = off): attacks/skills, drinking and using items, onmyo talismans, ninjutsu, throwing items. Guard+X/Y/A is a combination and does not cancel; movement is irrelevant |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | Which buttons count as attacks / how close a press counts as a combination |
 | `CancelActionStrictHold` / `CancelActionFrames` / `CancelActionRecentMs` | 0 / 30 / **0** | Strict “held blocks” mode / motion frames advanced / **0 = any guard press cancels** (perfect and normal blocks alike) |
@@ -217,6 +219,33 @@ it; the cost is charged the moment the swing starts). If the two are closer toge
 than the window, that swing's Ki is refunded as well. `KIREF` prints the reference it
 adopted: if it is clearly above your real Ki before the block, that is what happened —
 lower `KiTopUpPreEventMs` (e.g. 50) or set it to `0`.
+
+### The 99 gauge (amrita / guardian-spirit gauge): two switches
+
+| Switch | When it applies | Default |
+| --- | --- | --- |
+| `LivingWeaponGaugeOnGuard` (+ `LivingWeaponGaugePercent`) | while **not** in the 99 state: +N% gauge per perfect guard | off / 10 |
+| `LivingWeaponExtendOnGuard` (+ `LivingWeaponExtendPercent`) | while **in** the 99 state: +N% per perfect guard (extends the burning gauge) | off / 10 |
+
+Mechanically these do not write a field: they call the engine's own state object
+(`Character::AddStateObjectAmritaGaugeUp`, constructor `0x79E880`, state id `0x20`),
+whose apply is `gauge = min(gauge + magnitude, 1.0)` on a gauge normalised to 0..1. So
+"10% of the gauge" is the magnitude `0.10` and the engine does the clamping. Whether
+the 99 state is active comes from the engine's own activation flag (the byte written by
+`Player::SetTsukumoWeaponActiveFlag`); if that flag cannot be read the mod falls back to
+the accumulate switch, so a wrong flag reading cannot silently disable accumulation.
+
+Every call is logged:
+
+```
+LW engine: the 99-gauge constructor at 0x... stamps state id 0x20 in its first 128 bytes
+LW gauge: +10% via AmritaGaugeUp state 0x... (in 99 state=0, add()=1, container check: present)
+```
+
+`add()=1` and `present` mean the engine accepted the state object. Like the timed buffs
+this path calls game code (switched off together by `DiagDisable` bit 16) and it
+**never calls the removal path** (that one crashes), leaving the tiny duration to expire
+on its own.
 
 ### Encoding
 

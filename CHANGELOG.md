@@ -197,6 +197,41 @@ KITRACE ki=97.59/105 (changed: ki)                      <- 638ms 后自己回上
 回归：新增 13 条断言（200 → **213**，含"事件前基准必须取到扣精前的值"与
 "半额减免只补一半"两条端到端用例）。
 
+### 2.0g 九十九槽（精华量表 / 守护灵槽）：两个新开关（0.1.1，默认关）
+
+两项新功能，共用一个写入：
+
+| 开关 | 何时生效 | 默认 |
+| --- | --- | --- |
+| `LivingWeaponGaugeOnGuard` + `LivingWeaponGaugePercent` | **不在**九十九状态时每次精防给量表加 N% | 关 / **10** |
+| `LivingWeaponExtendOnGuard` + `LivingWeaponExtendPercent` | **在**九十九状态时每次精防续 N%（烧条） | 关 / **10** |
+
+**实现路线不是"改字段"，而是调用引擎自己的状态对象**。定位过程（RE_NOTES §4.55）：
+RTTI 里有 `Character::AddStateObjectAmritaGaugeUp` / `AmritaGaugeRecover` /
+`AttackHitRecoverAmrita` 这一族类，取其 vtable 找到 apply：
+
+```asm
+007A8120  movss xmm2, [rcx + 0x50]        ; 构造函数传进来的"幅度"
+007A8128  addss xmm2, [rdx + 0x15C]       ; + 量表当前值
+007A8130  movss xmm3, [rip+..] = 1.0      ; ★ 量表上限就是 1.0 —— 0～1 归一化
+          ...夹紧后写回 [rdx + 0x15C]
+```
+
+于是"10% 槽"就是幅度 `0.10`，**量表挂在哪个对象上都不用猜**（引擎自己写），上限也由
+引擎夹紧。构造函数经 vtable 引用定位到 `0x79E880`，它 `mov qword [rax+0x10], 0x20`
+—— 状态 id `0x20`，正好进 MOD 已有的"ctor 必须盖章自己 state id"字节校验。
+
+调用形状与已停用的限时增益完全相同（`ctor(mgr, 时长秒, 幅度)` → `add(mgr, key, obj, -1, 0)`；
+引擎自己的调用点也是**同一个指针**同时传 ctor 与 add），并且沿用两条硬规则：
+**永不调用移除**（会崩）、**引擎调用只在输入线程**（VEH 里只parking一个百分比）。
+
+"是否在九十九状态"取自引擎自己那个激活标志：`Player::SetTsukumoWeaponActiveFlag`
+（符号表 `0x8A6AA0`）把布尔写到"进程全局 `0x18715E0` 指向的对象 +0x104"。读不到时
+（-1）回退到"攒槽"那条 —— 这样标志读错也**不会**让攒槽静默失效。
+
+判据/文档：新增 `pg_lw_plan()`（纯逻辑，14 条断言）与两条日志
+（`LW engine:` 一次性校验、`LW gauge:` 每次调用），验收文档有专节。
+
 ### 2.1 你在包内就能自己核对的
 
 | 做法 | 看什么 |
@@ -219,9 +254,9 @@ KITRACE ki=97.59/105 (changed: ki)                      <- 638ms 后自己回上
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
 | 锚点期望字节与解密镜像逐字节一致 | `python tools\test_anchors.py ..` | **4/4 一致**；输入槽推导得 `0x1B78658`，与独立已知值相符 |
-| 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **213 条断言全过** |
+| 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **227 条断言全过** |
 | INI 编码与取值边界 + **内置默认值必须等于随包 INI** | `python tools\test_ini_encodings.py ..\mod` | **6/6** |
-| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **50/50 标记；114 条日志 0 条未解释** |
+| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **52/52 标记；117 条日志 0 条未解释** |
 | 交付文档只引用真实存在的文件 | `python tools\test_doc_paths.py ..` | 通过 |
 | 导出表 | `python tools\list_exports.py ..\mod\Nioh1PerfectGuard.dll` | 12 个 `PG_*` |
 | **测试过的算术 == 发货的算术** | `python tools\test_logic_digest.py ..` | 两个构建的数值指纹一致 |

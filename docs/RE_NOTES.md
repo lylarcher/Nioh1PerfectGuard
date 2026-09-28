@@ -3896,3 +3896,113 @@ pg_ki_begin(&g_ki, ki, ...);                   // => 基准含这次扣除
 → 首次 tick 就回到 105（正好还回 33.97）"和"减免 50% → 只回到 88.02"两条端到端用例。
 `KIREF` / `KIV-FLAG` 两条新日志同时进了验收文档的标记表与文档一致性检查。
 
+---
+
+## 4.55 九十九槽（精华量表 / 守护灵槽）：找到引擎自己的"加量表"状态对象
+
+需求是两个新功能：① 精防成功积累九十九槽（默认关，默认 10%）；② 九十九状态下精防
+续烧条（默认关，默认 10%）。两者共用一个写入，区别只在**什么时候**写。
+
+### 4.55.1 先确定它叫什么（名字对了，代码就浮出来了）
+
+- 引擎内部把九十九叫 **Tsukumo**：符号表里有 `Player::SetTsukumoWeaponActiveFlag`、
+  `Tutorial::GetCountTsukumoUse`，字符串 `TSUKUMO_WEAPON`、`Living Weapon Activated`。
+- 把"守护灵 / 精华量表"叫 **Amrita / Amurita**：`Gadget::GetAbosrbAmuritaRate`、
+  `Gadget::UseAbosrbAmurita`、`Character::ForceDropAmurita` ……
+- 真正的突破口是 **RTTI 类名**（`analyze.py rtti --grep Amrita`）：
+
+```
+Character::AddStateObjectAmritaGaugeUp             vft=0x11A8B90
+Character::AddStateObjectAmritaGaugeRecover        vft=0x11A95E0
+Character::AddStateObjectAttackHitRecoverAmrita    vft=0x11A8D20
+Character::AddStateObjectAmritaUpPlus              vft=0x11A8DC0
+Character::AddStateObjectDyingAmritaUp             vft=0x11A9400
+```
+
+即"给精华量表加量"是**引擎自己的一个状态对象**（与 §4.51/4.52 那套 buff 状态对象同一
+体系），而不是某个可以直接写的字段。
+
+### 4.55.2 量表是 0～1 归一化的：从 apply 的两行反汇编直接读出
+
+取 `AmritaGaugeUp` vtable，逐个方法反汇编，slot 8（`0x7A8120`）就是 apply：
+
+```asm
+007A8120  movss xmm2, [rcx + 0x50]      ; 构造函数第 2 个 float = 本次增量
+007A8128  addss xmm2, [rdx + 0x15C]     ; += 量表当前值（rdx = 目标对象）
+007A8130  movss xmm3, [rip+0xde0800]    ; -> 0x1588938，float = 1.0
+007A8138  movaps xmm1, xmm2
+007A813B  subss xmm1, xmm3
+007A813F  comiss xmm1, xmm0             ; xmm0 = 0
+007A8142  jb   0x7A814D
+007A8144  movss [rdx + 0x15C], xmm3     ; 超过 1.0 → 夹到 1.0
+007A814D  movss [rdx + 0x15C], xmm2     ; 否则写回新值
+```
+
+三条结论一次到手：
+
+1. 量表是**归一化 float（0～1）**，上限常量就是 `1.0`；
+2. `"10% 槽" ＝ 构造函数第二个参数 0.10` —— 百分比不需要任何换算或猜测；
+3. **不需要知道量表挂在哪个对象上**：写 `[rdx+0x15C]` 的 rdx 由引擎的状态系统传进来。
+
+（附带：`AmritaUpPlus` 的 apply 用的是 `[rbx+0x100]`，与量表不是同一个字段 —— 可见这一族
+状态对象各自改各自的字段，"哪个类改哪个字段"必须一个个看，不能类推。）
+
+### 4.55.3 构造函数：`0x79E880`，状态 id `0x20`，与 buff ctor 同簇
+
+vtable 指针的写引用（`ripref.py` refs 0x11A8B90）把 ctor 钉在 `0x79E880`：
+
+```asm
+0079E880  mov ebx, ecx                  ; arg1（管理器）
+0079E887  movaps xmm6, xmm1             ; arg2 = 时长（秒）
+0079E88A  movaps xmm7, xmm2             ; arg3 = 增量
+0079E8AF  call [r9+0x28]                ; 分配（0x58 字节）
+0079E8CE  mov [rax+8], rcx              ; rcx = [arg1+0x168] ← 宿主角色指针
+0079E8D9  mov qword [rax+0x10], 0x20    ; ★ 状态 id = 0x20
+0079E90C  movss [rax+0x50], xmm7        ; 增量存 +0x50（apply 读的就是它）
+0079E916  mov qword [rax], rcx(=vtable)
+```
+
+- 状态 id **0x20** 落在 MOD 现有校验的扫描窗口（`mov qword [rax+0x10], imm32`，见 §4.52 的
+  `ctor_stamps_state_id`）内 → 可以直接复用"**必须盖章自己的 state id** 才允许跳进去"这条规则。
+- `[arg1+0x168]` 是宿主角色：这一点与 §4.51 的观察一致 —— 状态对象的方法都用
+  `[[obj+8]+0x240]`（= 角色 → param），所以 obj+8 是角色，ctor 的 arg1 就是"持有角色指针的
+  那个对象"，也就是 MOD 现有的 `buff_manager()`（`[[char+0x240]]+0x10B0`）。
+- 引擎自己的加状态调用点（`ripref.py callers 0x7A2890`，43 处）显示它**同一个指针**同时传
+  ctor 与 add：`mov rcx, rbx; call ctor` → `mov rcx, rbx; call add`。这在 §4.52.6 曾是一个
+  疑点（"我们是不是把容器当成了管理器"），现在可以排除：形状与引擎自己一致。
+
+### 4.55.4 "是否在九十九状态"：引擎自己那个激活标志
+
+符号表把 `Player::SetTsukumoWeaponActiveFlag` 映射到 `0x8A6AA0`；它的函数体是脚本绑定
+形状（`0xAF4E0` 取参数、`0xAF830` 读布尔），最后：
+
+```asm
+008A6ADD  mov rcx, [rip+0xfcaafc]   ; -> 0x18715E0，进程全局里的对象指针
+008A6AE4  mov byte [rcx+0x104], al  ; ★ 九十九激活标志 = 该对象 +0x104
+```
+
+所以"在不在九十九状态" = `*(BYTE*)(*(void**)(base+0x18715E0) + 0x104)`。这个字节的语义是
+**静态推断**（名字 + 写入点一致），因此实现上把"读不到"当作第三种取值处理，并让它在
+"续烧条"关着时被完全忽略 —— 读错也只会加、不会静默失效。
+
+### 4.55.5 落地的实现与它为什么这样写
+
+- 新增纯逻辑 `pg_lw_plan(gauge_on, gauge_pct, extend_on, extend_pct, in_lw)`：九十九状态中
+  且"续烧条"开着 → 用续的百分比；否则用攒槽的百分比。**顺序是刻意的**：续烧条没开时标志
+  根本不参与判断，所以标志读错无法把攒槽功能关掉。
+- 写入沿用限时增益那套（`ctor(mgr, 0.05s, pct/100)` → `add(mgr, 0x20, obj, -1, 0)`），
+  **永不调用移除**（§4.52 的崩溃），时长交给引擎过期；**引擎调用只在输入线程**，
+  VEH 里只把百分比 parking 到一个 volatile 变量。
+- 新增 14 条断言（213 → **227**）与两条日志（`LW engine:` 一次性校验、`LW gauge:` 每次调用
+  写明加了多少 / 是否在九十九状态 / `add()` 返回值 / 容器回读结果）。
+- 未实机验证：与限时增益一样，默认关闭，且只有实机日志能证明"引擎真的把幅度加上去了"。
+
+### 4.55.6 顺带得到的两件工具性收获
+
+1. **引擎自带符号表**：`.rdata` 里有一张 `{name_ptr, func_ptr}` 的 16 字节记录表（1466 条），
+   `analyze.py namerefs` 已经能查其中一条；本轮把它整张导出成 `_work\symtab.txt`
+   （`Player::*` / `Gadget::*` / `Character::*` / `Refer::*` 等），以后按名字找函数不再靠猜。
+2. **RTTI → vtable → 方法**这条链（`analyze.py rtti`）可以直接把"某个效果是哪个类、哪个
+   方法在改哪个字段"读出来，本轮就是靠它一步跨过"量表字段在哪"这个原本最难的问题。
+
+

@@ -135,6 +135,15 @@ typedef struct {
     int damage_cut_ms;
     int armor_buff;                // 0/1
     int armor_buff_ms;
+    // The 99 gauge (精华量表 / 守护灵槽). Two independent switches sharing one write:
+    // while the 99 state is inactive the gauge accumulates, while it is active the
+    // same gauge is the burning timer, so adding to it extends the state. Both are
+    // off by default; each has its own percentage so "10% per guard" can mean two
+    // different things in the two phases.
+    int lw_gauge_on;
+    int lw_gauge_percent;
+    int lw_extend_on;
+    int lw_extend_percent;
     // Guard cancels the player's attack action -- but only a *pure* guard press.
     // `attack_mask` says which buttons count as attacks (A/B/X/Y by default), and
     // the two windows encode the two ways a press can be a combination instead:
@@ -230,7 +239,14 @@ static void config_defaults(Config *c) {
     c->damage_cut_percent = 0.0f;
     c->damage_cut_ms = 10000;
     c->armor_buff = 0;
+
     c->armor_buff_ms = 5000;
+    // The 99 gauge: off by default (it calls game code, like the timed buffs), and
+    // 10% per perfect guard in each phase, which is what was asked for.
+    c->lw_gauge_on = 0;
+    c->lw_gauge_percent = 10;
+    c->lw_extend_on = 0;
+    c->lw_extend_percent = 10;
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
     // and unlike the timed buffs it needs no engine calls -- it only advances the
     // current action's motion frame, the same kind of write this mod already makes.
@@ -423,6 +439,12 @@ static int config_load_inner(int first_time) {
     c.damage_cut_ms = ini_int("DamageCutMs", c.damage_cut_ms, 0, 600000, &ok);
     c.armor_buff = ini_int("ArmorBuff", c.armor_buff, 0, 1, &ok);
     c.armor_buff_ms = ini_int("ArmorBuffMs", c.armor_buff_ms, 0, 600000, &ok);
+    c.lw_gauge_on = ini_int("LivingWeaponGaugeOnGuard", c.lw_gauge_on, 0, 1, &ok);
+    c.lw_gauge_percent = ini_int("LivingWeaponGaugePercent", c.lw_gauge_percent,
+                                 0, 100, &ok);
+    c.lw_extend_on = ini_int("LivingWeaponExtendOnGuard", c.lw_extend_on, 0, 1, &ok);
+    c.lw_extend_percent = ini_int("LivingWeaponExtendPercent", c.lw_extend_percent,
+                                  0, 100, &ok);
     c.cancel_action_on_guard = ini_int("CancelActionOnGuard", c.cancel_action_on_guard, 0, 1, &ok);
     c.attack_button_mask = ini_int("AttackButtonMask", c.attack_button_mask, 1, 0xFFFF, &ok);
     c.combo_guard_ms = ini_int("ComboGuardWindowMs", c.combo_guard_ms, 0, 1000, &ok);
@@ -1797,6 +1819,130 @@ static void buff_watchdog_config(void) {
     }
 }
 
+// ------------------------------------------- the 99 gauge (精华量表 / 守护灵槽) --
+// A perfect guard can add to the 99 gauge in both of its phases: while the 99 state
+// is inactive the gauge accumulates towards activation, and while it is active that
+// same gauge is the burning timer, so adding extends it.
+//
+// HOW, and why not by writing a field: the engine already has a state object for
+// exactly this. RTTI names it Character::AddStateObjectAmritaGaugeUp; its constructor
+// is 0x79E880 and stamps state id 0x20, and its apply method is literally
+//
+//     007A8120  movss xmm2, [rcx+0x50]      ; the constructor's magnitude
+//     007A8128  addss xmm2, [rdx+0x15C]     ; + the gauge's current value
+//     007A8130  movss xmm3, [rip+...] = 1.0 ; the gauge's maximum is 1.0 (normalised)
+//               ... clamp, then store back to [rdx+0x15C]
+//
+// So the gauge is a 0..1 float, "10% of the gauge" is exactly the magnitude 0.10, and
+// which object actually carries the gauge does not have to be guessed: the engine
+// applies it. The call shape is the one this mod already uses for the timed buffs
+// (ctor(mgr, duration_seconds, magnitude) then add(mgr, key, obj, -1, 0)) and, like
+// the engine's own call sites, the same manager pointer goes to both.
+//
+// Two hard rules, both inherited from the timed-buff work:
+//   * NEVER call the removal path (0x7A25C0). It crashes the game (RE_NOTES 4.52.5);
+//     the duration handed to the constructor is what takes the node away, so it is
+//     deliberately tiny -- the effect is applied when the node goes in, and a stale
+//     node must not linger.
+//   * the engine call happens on the input thread, never in the VEH. The handler only
+//     computes a percentage and parks it.
+//
+// Which of the two switches applies is decided by pg_lw_plan() in pg_logic.h, and the
+// "is the 99 state active" input to it comes from the flag the engine's own
+// Player::SetTsukumoWeaponActiveFlag writes: a byte at +0x104 of the object held by
+// the process global at 0x18715E0. An unreadable flag (-1) falls back to the
+// accumulate switch, so a wrong guess can only add where it meant to extend.
+#define PG_STATE_ID_AMRITA_UP 0x20             // stamped by the ctor at +0x10
+#define PG_RVA_STATE_CTOR_AMRITA_UP 0x79E880
+#define PG_LW_STATE_DURATION_S 0.05f           // seconds; the engine expires the node
+#define PG_RVA_LW_FLAG_HOLDER 0x18715E0
+#define PG_LW_FLAG_OFFSET 0x104
+
+static volatile LONG g_lw_pending_pct = 0;     // parked by the handler, taken by the thread
+static volatile LONG g_lw_seen_in_state = -1;  // last flag reading: -1 unknown, 0/1 known
+static LONG g_lw_log = 0;
+static int g_lw_engine_ok = -1;
+
+// 1 = the engine says the 99 state is active, 0 = it says it is not, -1 = cannot tell.
+// ReadProcessMemory on our own process, so a wrong or not-yet-initialised pointer
+// fails the call instead of faulting.
+static int lw_in_state(void) {
+    if (!g_base) return -1;
+    void *holder = NULL;
+    if (!ReadProcessMemory(GetCurrentProcess(),
+                           (void *)(ULONG_PTR)(g_base + PG_RVA_LW_FLAG_HOLDER),
+                           &holder, sizeof(holder), NULL) || !holder)
+        return -1;
+    unsigned char flag = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(),
+                           (char *)holder + PG_LW_FLAG_OFFSET, &flag, 1, NULL))
+        return -1;
+    return flag ? 1 : 0;
+}
+
+// Called from the VEH: two safe reads and pure arithmetic, no engine calls.
+static void lw_plan_on_guard(void) {
+    int in_lw = lw_in_state();
+    InterlockedExchange(&g_lw_seen_in_state, in_lw);
+    int pct = pg_lw_plan(g_cfg.lw_gauge_on, g_cfg.lw_gauge_percent,
+                         g_cfg.lw_extend_on, g_cfg.lw_extend_percent, in_lw);
+    if (pct > 0) InterlockedExchange(&g_lw_pending_pct, pct);
+}
+
+// Same rule as the timed-buff constructors: prove the function stamps its own state
+// id before jumping into it, because a game update that moves it would otherwise be
+// an unrecoverable jump into arbitrary code.
+static int lw_engine_verify(void) {
+    if (g_lw_engine_ok >= 0) return g_lw_engine_ok;
+    g_lw_engine_ok = 0;
+    if (!g_base) return 0;
+    const unsigned char *p =
+        (const unsigned char *)(ULONG_PTR)(g_base + PG_RVA_STATE_CTOR_AMRITA_UP);
+    int at = ctor_stamps_state_id(p, PG_CTOR_ID_SCAN, PG_STATE_ID_AMRITA_UP);
+    log_line("LW engine: the 99-gauge constructor at 0x%llX %s state id 0x%X in its "
+             "first %d bytes", (unsigned long long)(ULONG_PTR)p,
+             at >= 0 ? "stamps" : "does NOT stamp", PG_STATE_ID_AMRITA_UP,
+             PG_CTOR_ID_SCAN);
+    g_lw_engine_ok = at >= 0;
+    return g_lw_engine_ok;
+}
+
+// Runs on the input thread. Takes the parked percentage, adds one state node and
+// lets the engine expire it.
+static void lw_gauge_tick(void) {
+    LONG pct = InterlockedExchange(&g_lw_pending_pct, 0);
+    if (pct <= 0) return;
+    if (!buff_engine_calls_enabled()) return;
+    if (!lw_engine_verify()) return;
+    void *mgr = buff_manager();
+    if (!mgr) return;
+
+    float mag = (float)pct / 100.0f;
+    pg_state_ctor_fn ctor =
+        (pg_state_ctor_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_CTOR_AMRITA_UP);
+    pg_state_add_fn add = (pg_state_add_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_ADD);
+
+    void *obj = ctor(mgr, PG_LW_STATE_DURATION_S, mag);
+    if (!obj) {
+        if (g_lw_log < 30) {
+            log_line("LW gauge: +%ld%% FAILED (constructor returned NULL)", pct);
+            g_lw_log++;
+        }
+        return;
+    }
+    unsigned char ok = add(mgr, PG_STATE_ID_AMRITA_UP, obj, -1, 0);
+    if (g_lw_log < 30) {
+        int seen = buff_state_present(mgr, PG_STATE_ID_AMRITA_UP, obj);
+        log_line("LW gauge: +%ld%% via AmritaGaugeUp state 0x%llX (in 99 state=%ld, "
+                 "add()=%u, container check: %s)", pct,
+                 (unsigned long long)obj, (long)InterlockedCompareExchange(
+                     &g_lw_seen_in_state, 0, 0),
+                 (unsigned)ok,
+                 seen == 1 ? "present" : (seen == 0 ? "NOT FOUND" : "unreadable"));
+        g_lw_log++;
+    }
+}
+
 // Guard cancels the player's attack action.
 //
 // Mechanism: advance the current action's motion frame -- the exact write the older
@@ -1930,6 +2076,9 @@ static void perfect_guard_rewards(int from_flag) {
     // Timers only: the engine calls happen on our own thread (see the timed-buff
     // section). Never call into the engine from this exception handler.
     buffs_on_perfect_guard(now_ms());
+    // The 99 gauge: also just a parked percentage here (pg_lw_plan decides which
+    // switch applies); the engine call happens on the input thread.
+    lw_plan_on_guard();
     apply_cancel_recovery(player_now);
 
     // One-shot layout diagnostic: the engine's Refer::* getters read these exact
@@ -3024,6 +3173,7 @@ static DWORD WINAPI input_thread(LPVOID param) {
         // here and nowhere else, never in the exception handler.
         buff_watchdog_config();
         buff_tick();
+        lw_gauge_tick();
         poll_hotkey();
         Sleep(8);
     }
@@ -3277,7 +3427,8 @@ __declspec(dllexport) const char *PG_SelfTest(void) {
              "padslot=%d vk=%d learn=%d trace=%d enemyki=%g enemyhp=%g "
              "sound_enabled=%d vol=%.2f file=%s hotkey=%d diag=%d eventsrc=%d "
              "hpmode=%d hppct=%g hpfixed=%g spdpct=%g spdms=%d dmgcutpct=%g "
-             "dmgcutms=%d armor=%d armorms=%d | wav=%d audio=%d",
+             "dmgcutms=%d armor=%d armorms=%d lwgauge=%d lwpct=%d lwext=%d "
+             "lwextpct=%d | wav=%d audio=%d",
              rc, g_cfg.enabled, g_cfg.window_ms, g_cfg.cancel_recovery,
              (double)g_cfg.cancel_recovery_frames, g_cfg.ki_reduction_percent,
              g_cfg.ki_topup, g_cfg.ki_topup_preevent_ms, g_cfg.ki_recovery_mode,
@@ -3290,7 +3441,9 @@ __declspec(dllexport) const char *PG_SelfTest(void) {
              g_cfg.hp_recovery_mode, (double)g_cfg.hp_restore_percent,
              (double)g_cfg.hp_restore_fixed, (double)g_cfg.speed_buff_percent,
              g_cfg.speed_buff_ms, (double)g_cfg.damage_cut_percent,
-             g_cfg.damage_cut_ms, g_cfg.armor_buff, g_cfg.armor_buff_ms, w, a);
+             g_cfg.damage_cut_ms, g_cfg.armor_buff, g_cfg.armor_buff_ms,
+             g_cfg.lw_gauge_on, g_cfg.lw_gauge_percent, g_cfg.lw_extend_on,
+             g_cfg.lw_extend_percent, w, a);
 
     g_cfg = saved_cfg;
     g_cfg_loaded = saved_loaded;

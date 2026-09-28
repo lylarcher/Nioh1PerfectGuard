@@ -140,6 +140,38 @@ static inline float pg_ki_step(PgKiRestore *s, float now_value,
     return target;
 }
 
+// ------------------------------------------------- the 99 gauge (精华量表) -------
+// Which percentage of the 99 gauge a perfect guard should add, and whether to add
+// at all.
+//
+// The engine's own "add to the 99 gauge" is a state object -- the RTTI name is
+// Character::AddStateObjectAmritaGaugeUp, and its apply is
+//     gauge = min(gauge + [obj+0x50], 1.0)
+// on a gauge that is normalised to 0..1. So a percentage maps straight onto the
+// constructor's magnitude and *no field offset has to be guessed*: the engine adds
+// the amount to whatever object the gauge really lives on and does the clamping.
+//
+// The gauge does two different jobs, which is why the operator has two switches:
+// while the 99 state is inactive the gauge accumulates towards activation, while it
+// is active that same gauge *is* the burning timer, so adding to it extends the
+// state. `in_lw` is 1 when the engine's own flag says the state is active, 0 when it
+// says it is not, and -1 when the flag could not be read.
+//
+// The ordering is deliberate: the extend path only takes over when the operator
+// actually enabled it, so a misread flag can never silently switch the accumulate
+// feature off -- it can only add instead of extend, which is the harmless direction.
+// An unreadable flag (-1) behaves the same way.
+static inline int pg_lw_plan(int gauge_on, int gauge_percent, int extend_on,
+                             int extend_percent, int in_lw) {
+    if (in_lw > 0 && extend_on && extend_percent > 0) {
+        return extend_percent > 100 ? 100 : extend_percent;
+    }
+    if (gauge_on && gauge_percent > 0) {
+        return gauge_percent > 100 ? 100 : gauge_percent;
+    }
+    return 0;
+}
+
 // ---------------------------------------------------- the pre-event reference --
 // Which Ki value a block is measured against.
 //
@@ -768,6 +800,20 @@ static inline unsigned int pg_logic_digest(void) {
         // an unwritten slot, an absurd value and a backwards clock are all ignored
         const PgKiSample junk[3] = { { 0, 500.0f }, { 2049, 999999.0f }, { 4000, 900.0f } };
         h = pg_fold_float(h, pg_ki_ref(junk, 3, 2050, 100, 42.0f));
+    }
+
+    // 3c. the 99-gauge plan across both switches and all three flag readings
+    {
+        const int ons[2] = {0, 1};
+        const int pcts[4] = {0, 5, 10, 250};
+        const int flags[3] = {-1, 0, 1};
+        for (int a = 0; a < 2; ++a)
+            for (int b = 0; b < 2; ++b)
+                for (int c = 0; c < 4; ++c)
+                    for (int d = 0; d < 4; ++d)
+                        for (int e = 0; e < 3; ++e)
+                            h = pg_fold_bits(h, (unsigned)pg_lw_plan(
+                                ons[a], pcts[c], ons[b], pcts[d], flags[e]));
     }
 
     // 4. verdict classification over the same grid
