@@ -35,7 +35,7 @@
 // tests cannot drift away from what ships.
 #include "pg_logic.h"
 
-#define MOD_VERSION "0.1.2-nioh1"
+#define MOD_VERSION "0.1.1-nioh1"
 #define MAX_TARGETS 4
 #define MAX_ARMED 8192
 #define LOG_CAP (MAX_PATH * 2)
