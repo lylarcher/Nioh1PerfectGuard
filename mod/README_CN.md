@@ -155,17 +155,18 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `LivingWeaponExtendOnGuard`（+ `LivingWeaponExtendPercent`） | **在**九十九状态时，每次精防续 N%（烧条） | 关 / 10 |
 
 机制上它们不是"改字段"，而是**调用引擎自己的那个状态对象**
-（`Character::AddStateObjectAmritaGaugeUp`，构造函数 `0x79E880`，状态 id `0x20`）：
+（`Character::AddStateObjectAmritaGaugeUp`，构造函数 `0x79E870`，状态 id `0x20`）：
 它的 apply 就是 `gauge = min(gauge + 幅度, 1.0)`，量表 0～1 归一化，所以
-"10% 槽"＝幅度 `0.10`，上限由引擎夹紧。**是否在九十九状态**由引擎自己那个激活标志
-（`Player::SetTsukumoWeaponActiveFlag` 写的字节）判断；标志读不到时会回退到"攒槽"那条，
-所以标志读错也**不会**让攒槽静默失效。
+"10% 槽"＝幅度 `0.10`，上限由引擎夹紧。**是否在九十九状态**由两路相或判断：① 引擎状态
+容器（`[[char+0x240]]+0x10B0`）里存在 `CallSpirit` 状态对象（状态 id `0x22`）—— 主判据；
+② 引擎的激活标志字节（`Player::SetTsukumoWeaponActiveFlag` 写的那个字节）。任一路为真即
+算"在"，两路都读不到则按"不在"处理（走攒槽），所以判据读错**不会**让攒槽静默失效。
 
 日志里每次调用都会写明：
 
 ```
 LW engine: the 99-gauge constructor at 0x... stamps state id 0x20 in its first 128 bytes
-LW gauge: +10% via AmritaGaugeUp state 0x... (in 99 state=0, add()=1, container check: present)
+LW gauge: +10% via AmritaGaugeUp state 0x... (in 99 state=0 [container 0x22=0, flag=-1], add()=1, container check: present)
 ```
 
 `add()=1` 且 `present` ＝ 引擎收下了这个状态对象。与限时增益一样，这条路会调用游戏

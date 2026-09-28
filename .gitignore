@@ -63,3 +63,4 @@ _work/*.log
 !/_work/zig_url.txt
 /_work/*_states.json
 /_work/*_ctors.json
+/_work/*.json

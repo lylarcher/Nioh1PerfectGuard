@@ -1826,7 +1826,7 @@ static void buff_watchdog_config(void) {
 //
 // HOW, and why not by writing a field: the engine already has a state object for
 // exactly this. RTTI names it Character::AddStateObjectAmritaGaugeUp; its constructor
-// is 0x79E880 and stamps state id 0x20, and its apply method is literally
+// is 0x79E870 and stamps state id 0x20, and its apply method is literally
 //
 //     007A8120  movss xmm2, [rcx+0x50]      ; the constructor's magnitude
 //     007A8128  addss xmm2, [rdx+0x15C]     ; + the gauge's current value
@@ -1848,25 +1848,41 @@ static void buff_watchdog_config(void) {
 //     computes a percentage and parks it.
 //
 // Which of the two switches applies is decided by pg_lw_plan() in pg_logic.h, and the
-// "is the 99 state active" input to it comes from the flag the engine's own
-// Player::SetTsukumoWeaponActiveFlag writes: a byte at +0x104 of the object held by
-// the process global at 0x18715E0. An unreadable flag (-1) falls back to the
-// accumulate switch, so a wrong guess can only add where it meant to extend.
+// "is the 99 state active" input to it comes from **two** sources, OR-ed together:
+//
+//   * the engine's own state container ([[char+0x240]]+0x10B0): while the 99 state is
+//     up, the container holds the CallSpirit state object, state id 0x22 (ctor
+//     0x79F1B0). The mod already walks that container (buff_state_present), so this
+//     needs no new offset at all. This is the primary judge.
+//   * the flag the engine's Player::SetTsukumoWeaponActiveFlag (0x8A6AA0) writes: a
+//     byte at +0x104 of the object held by the process global at 0x18715E0. Its
+//     semantics are inferred rather than proven, so it is only ever allowed to *add*
+//     evidence of the 99 state, never to talk the container out of it.
+//
+// Any evidence => "active"; one readable source saying no while the other is
+// unreadable => "not active"; neither readable => unknown (-1), which pg_lw_plan
+// treats as "not active". The bias is deliberate: a false "active" merely uses the
+// extend percentage (harmless), while a false "not active" would silently stop the
+// accumulate feature from ever firing.
 #define PG_STATE_ID_AMRITA_UP 0x20             // stamped by the ctor at +0x10
-#define PG_RVA_STATE_CTOR_AMRITA_UP 0x79E880
+#define PG_STATE_ID_CALL_SPIRIT 0x22           // present in the container while in the 99 state
+#define PG_RVA_STATE_CTOR_AMRITA_UP 0x79E870
 #define PG_LW_STATE_DURATION_S 0.05f           // seconds; the engine expires the node
 #define PG_RVA_LW_FLAG_HOLDER 0x18715E0
 #define PG_LW_FLAG_OFFSET 0x104
+#define PG_LW_REFRESH_TICKS 8                  // ~64ms on the 8ms input tick
 
 static volatile LONG g_lw_pending_pct = 0;     // parked by the handler, taken by the thread
-static volatile LONG g_lw_seen_in_state = -1;  // last flag reading: -1 unknown, 0/1 known
+static volatile LONG g_lw_seen_in_state = -1;  // -1 unknown, 0/1 resolved by the thread
+static volatile LONG g_lw_seen_present = -1;   // container judge: 1/0, -1 unreadable (log only)
+static volatile LONG g_lw_seen_flag = -1;      // flag byte: 1/0, -1 unreadable (log only)
 static LONG g_lw_log = 0;
 static int g_lw_engine_ok = -1;
 
-// 1 = the engine says the 99 state is active, 0 = it says it is not, -1 = cannot tell.
-// ReadProcessMemory on our own process, so a wrong or not-yet-initialised pointer
-// fails the call instead of faulting.
-static int lw_in_state(void) {
+// 1 = the engine's flag byte says the 99 state is active, 0 = it says it is not,
+// -1 = cannot tell. ReadProcessMemory on our own process, so a wrong or not-yet
+// initialised pointer fails the call instead of faulting.
+static int lw_flag_byte(void) {
     if (!g_base) return -1;
     void *holder = NULL;
     if (!ReadProcessMemory(GetCurrentProcess(),
@@ -1880,10 +1896,31 @@ static int lw_in_state(void) {
     return flag ? 1 : 0;
 }
 
-// Called from the VEH: two safe reads and pure arithmetic, no engine calls.
+// Combine the two sources. Called from the input thread (it walks a tree), never from
+// the exception handler.
+static int lw_resolve(void) {
+    int flag = lw_flag_byte();
+    void *mgr = buff_manager();
+    int present = mgr ? buff_state_present(mgr, PG_STATE_ID_CALL_SPIRIT, NULL) : -1;
+    InterlockedExchange(&g_lw_seen_present, present);
+    InterlockedExchange(&g_lw_seen_flag, flag);
+    if (present == 1 || flag == 1) return 1;
+    if (present == 0 || flag == 0) return 0;
+    return -1;
+}
+
+// Cheap enough for the input tick, and it must not run in the VEH: an exception
+// handler on a game thread has no business walking a 256-node tree.
+static void lw_refresh_state(void) {
+    static int tick = 0;
+    if (++tick % PG_LW_REFRESH_TICKS) return;
+    InterlockedExchange(&g_lw_seen_in_state, lw_resolve());
+}
+
+// Called from the VEH: reads the cached judgement only -- no memory walking, no
+// engine calls, no arithmetic beyond the plan itself.
 static void lw_plan_on_guard(void) {
-    int in_lw = lw_in_state();
-    InterlockedExchange(&g_lw_seen_in_state, in_lw);
+    int in_lw = (int)InterlockedCompareExchange(&g_lw_seen_in_state, 0, 0);
     int pct = pg_lw_plan(g_cfg.lw_gauge_on, g_cfg.lw_gauge_percent,
                          g_cfg.lw_extend_on, g_cfg.lw_extend_percent, in_lw);
     if (pct > 0) InterlockedExchange(&g_lw_pending_pct, pct);
@@ -1933,10 +1970,12 @@ static void lw_gauge_tick(void) {
     unsigned char ok = add(mgr, PG_STATE_ID_AMRITA_UP, obj, -1, 0);
     if (g_lw_log < 30) {
         int seen = buff_state_present(mgr, PG_STATE_ID_AMRITA_UP, obj);
-        log_line("LW gauge: +%ld%% via AmritaGaugeUp state 0x%llX (in 99 state=%ld, "
-                 "add()=%u, container check: %s)", pct,
-                 (unsigned long long)obj, (long)InterlockedCompareExchange(
-                     &g_lw_seen_in_state, 0, 0),
+        log_line("LW gauge: +%ld%% via AmritaGaugeUp state 0x%llX (in 99 state=%ld "
+                 "[container 0x22=%ld, flag=%ld], add()=%u, container check: %s)", pct,
+                 (unsigned long long)obj,
+                 (long)InterlockedCompareExchange(&g_lw_seen_in_state, 0, 0),
+                 (long)InterlockedCompareExchange(&g_lw_seen_present, 0, 0),
+                 (long)InterlockedCompareExchange(&g_lw_seen_flag, 0, 0),
                  (unsigned)ok,
                  seen == 1 ? "present" : (seen == 0 ? "NOT FOUND" : "unreadable"));
         g_lw_log++;
@@ -3173,6 +3212,7 @@ static DWORD WINAPI input_thread(LPVOID param) {
         // here and nowhere else, never in the exception handler.
         buff_watchdog_config();
         buff_tick();
+        lw_refresh_state();
         lw_gauge_tick();
         poll_hotkey();
         Sleep(8);

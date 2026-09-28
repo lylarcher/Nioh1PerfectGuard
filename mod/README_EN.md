@@ -228,18 +228,21 @@ lower `KiTopUpPreEventMs` (e.g. 50) or set it to `0`.
 | `LivingWeaponExtendOnGuard` (+ `LivingWeaponExtendPercent`) | while **in** the 99 state: +N% per perfect guard (extends the burning gauge) | off / 10 |
 
 Mechanically these do not write a field: they call the engine's own state object
-(`Character::AddStateObjectAmritaGaugeUp`, constructor `0x79E880`, state id `0x20`),
+(`Character::AddStateObjectAmritaGaugeUp`, constructor `0x79E870`, state id `0x20`),
 whose apply is `gauge = min(gauge + magnitude, 1.0)` on a gauge normalised to 0..1. So
-"10% of the gauge" is the magnitude `0.10` and the engine does the clamping. Whether
-the 99 state is active comes from the engine's own activation flag (the byte written by
-`Player::SetTsukumoWeaponActiveFlag`); if that flag cannot be read the mod falls back to
-the accumulate switch, so a wrong flag reading cannot silently disable accumulation.
+"10% of the gauge" is the magnitude `0.10` and the engine does the clamping. Whether the
+99 state is active is decided by **two sources OR-ed**: ① the engine's state container
+(`[[char+0x240]]+0x10B0`) holding the `CallSpirit` state object (state id `0x22`) — the
+primary judge; ② the engine's activation flag byte (the one
+`Player::SetTsukumoWeaponActiveFlag` writes). Either one counting as "active" is enough;
+if neither can be read the mod treats it as inactive (accumulate), so a wrong reading can
+never silently disable accumulation.
 
 Every call is logged:
 
 ```
 LW engine: the 99-gauge constructor at 0x... stamps state id 0x20 in its first 128 bytes
-LW gauge: +10% via AmritaGaugeUp state 0x... (in 99 state=0, add()=1, container check: present)
+LW gauge: +10% via AmritaGaugeUp state 0x... (in 99 state=0 [container 0x22=0, flag=-1], add()=1, container check: present)
 ```
 
 `add()=1` and `present` mean the engine accepted the state object. Like the timed buffs
