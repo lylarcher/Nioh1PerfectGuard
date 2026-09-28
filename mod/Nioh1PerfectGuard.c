@@ -143,6 +143,7 @@ typedef struct {
     int lw_gauge_on;
     int lw_gauge_percent;
     int lw_gauge_max;              // full value of the 99 gauge (measured ~636)
+    int lw_gauge_offset;           // byte offset of the real gauge store, 0 = not identified yet
     int lw_extend_on;
     int lw_extend_percent;
     // Guard cancels the player's attack action -- but only a *pure* guard press.
@@ -252,6 +253,11 @@ static void config_defaults(Config *c) {
     // value is ~636 -- NOT the Ki maximum at param+0x44, which is what an earlier
     // version clamped to (that is why every write was a no-op).
     c->lw_gauge_max = 636;
+    // [param+0x48] turned out to be a value the engine rewrites every frame (LWD2 proved
+    // it: wrote 260.6, read back 197), so the mod must not write it. Until the real
+    // store is identified this is 0 = disabled; the offset can then be set from the INI
+    // without a new build.
+    c->lw_gauge_offset = 0;
     c->lw_extend_on = 1;
     c->lw_extend_percent = 10;
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
@@ -450,6 +456,7 @@ static int config_load_inner(int first_time) {
     c.lw_gauge_percent = ini_int("LivingWeaponGaugePercent", c.lw_gauge_percent,
                                  0, 100, &ok);
     c.lw_gauge_max = ini_int("LivingWeaponGaugeMax", c.lw_gauge_max, 1, 100000, &ok);
+    c.lw_gauge_offset = ini_int("LivingWeaponGaugeOffset", c.lw_gauge_offset, 0, 0x4000, &ok);
     c.lw_extend_on = ini_int("LivingWeaponExtendOnGuard", c.lw_extend_on, 0, 1, &ok);
     c.lw_extend_percent = ini_int("LivingWeaponExtendPercent", c.lw_extend_percent,
                                   0, 100, &ok);
@@ -2038,9 +2045,9 @@ static void lw_diag(void) {
 #define PG_LW_SCAN_MAX (PG_LW_SCAN_PAR_LEN / 4)
 #define PG_LW_SCAN_MIN_DELTA 20.0f
 
-static float g_lw_scan_prev[2][PG_LW_SCAN_MAX];
-static unsigned long long g_lw_scan_last[2][PG_LW_SCAN_MAX];
-static int g_lw_scan_valid[2];
+static float g_lw_scan_prev[3][PG_LW_SCAN_MAX];
+static unsigned long long g_lw_scan_last[3][PG_LW_SCAN_MAX];
+static int g_lw_scan_valid[3];
 static LONG g_lw_scan_log = 0;
 
 static void lw_scan_window(int w, void *base, int len, const char *tag) {
@@ -2059,7 +2066,9 @@ static void lw_scan_window(int w, void *base, int len, const char *tag) {
     for (int i = 0; i < len / 4; ++i) {
         float a = g_lw_scan_prev[w][i], b = cur[i];
         if (!(a == a) || !(b == b)) continue;                  // NaN
-        // Transform/position floats live in the tens of thousands and would drown the`n        // log; a gauge is small (0..1 normalised, or 0..max a few hundred).`n        if (a > 20000.0f || a < -20000.0f || b > 20000.0f || b < -20000.0f) continue;
+        // Transform/position floats live in the tens of thousands and would drown the
+        // log; a gauge is small (0..1 normalised, or 0..max a few hundred).
+        if (a > 20000.0f || a < -20000.0f || b > 20000.0f || b < -20000.0f) continue;
         float d = b - a;
         if (d < 0) d = -d;
         if (d < PG_LW_SCAN_MIN_DELTA) continue;
@@ -2084,6 +2093,9 @@ static void lw_scan(void) {
     void *param = *(void **)((char *)player + 0x240);
     lw_scan_window(0, param, PG_LW_SCAN_PAR_LEN, "param");
     lw_scan_window(1, player, 0x1000, "char");
+    // The state manager ([[char+0x240]]+0x10B0) area, low threshold: a normalised gauge
+    // would live in something like this and is invisible to the >=20 jump test.
+    if (param) lw_scan_window(2, (char *)param + 0x10B0, 0x200, "smgr");
 }
 // Called from the VEH: reads the cached judgement, then writes the gauge field.
 //
@@ -2142,7 +2154,8 @@ static void lw_plan_on_guard(void) {
         return;
     }
 
-    float *cur = (float *)((char *)param + PG_LW_GAUGE_OFF);
+    if (g_cfg.lw_gauge_offset <= 0) return;            // real store not identified yet
+    float *cur = (float *)((char *)param + g_cfg.lw_gauge_offset);
     float c = *cur;
     float m = (float)g_cfg.lw_gauge_max;
     if (!(m > 0.0f) || m > PG_LW_CUR_MAX) return;      // NaN-safe
