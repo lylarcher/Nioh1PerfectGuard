@@ -1882,6 +1882,13 @@ static volatile LONG g_lw_seen_in_state = -1;  // -1 unknown, 0/1 resolved by th
 static volatile LONG g_lw_seen_present = -1;   // container judge: 1/0, -1 unreadable (log only)
 static volatile LONG g_lw_seen_flag = -1;      // flag byte: 1/0, -1 unreadable (log only)
 static LONG g_lw_log = 0;
+// Set by the write below, checked by the input thread ~64ms later: if the engine has
+// already put its own value back, the field is a mirror and writing it can never work.
+static volatile LONG g_lw_wrote = 0;
+static float g_lw_wrote_val = -1.0f;
+static float g_lw_wrote_max = -1.0f;
+static volatile LONG g_lw_back = 0;
+static float g_lw_back_val = -1.0f;
 
 // 1 = the engine's flag byte says the 99 state is active, 0 = it says it is not,
 // -1 = cannot tell. ReadProcessMemory on our own process, so a wrong or not-yet
@@ -1937,6 +1944,17 @@ static void lw_refresh_state(void) {
     static int tick = 0;
     if (++tick % PG_LW_REFRESH_TICKS) return;
     InterlockedExchange(&g_lw_seen_in_state, lw_resolve());
+    // Did our write survive? Only the input thread checks, and only once per write.
+    if (InterlockedCompareExchange(&g_lw_wrote, 0, 0) && !g_lw_back) {
+        if (g_base) {
+            void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+            void *pa = pl ? *(void **)((char *)pl + 0x240) : NULL;
+            if (pa) {
+                g_lw_back_val = *(float *)((char *)pa + 0x48);
+                InterlockedExchange(&g_lw_back, 1);
+            }
+        }
+    }
 }
 
 // Read-only measurement of every candidate field, once per second (max 120 lines).
@@ -1955,7 +1973,7 @@ static void lw_refresh_state(void) {
 static void lw_diag(void) {
     static unsigned long long last = 0;
     static int lines = 0;
-    if (lines >= 120) return;
+    if (lines >= 1200) return;
     unsigned long long now = now_ms();
     if (now - last < 1000) return;
     last = now;
@@ -1979,10 +1997,18 @@ static void lw_diag(void) {
     int c22 = mgr ? buff_state_present(mgr, PG_STATE_ID_CALL_SPIRIT, NULL) : -1;
     int n20 = mgr ? buff_state_present(mgr, PG_STATE_ID_AMRITA_UP, NULL) : -1;
 
+    float rec[16];
+    for (int i = 0; i < 16; ++i)
+        ReadProcessMemory(self, (char *)param + 0xBB0 + i * 0x50 + 0x0C, &rec[i], 4, &got);
     log_line("LWD param40=%.5g param44=%.5g param48=%.5g param4c=%.5g p15c=%.5g "
              "c15c=%.5g flag=%ld c22=%d n20=%d",
              p40, p44, p48, p4c, p15c, c15c,
              (long)InterlockedCompareExchange(&g_lw_seen_flag, 0, 0), c22, n20);
+    log_line("LWD2 wrote=%.5g/%.5g back=%.5g | rec0..7 %.4g %.4g %.4g %.4g %.4g %.4g %.4g %.4g "
+             "| rec8..15 %.4g %.4g %.4g %.4g %.4g %.4g %.4g %.4g",
+             g_lw_wrote_val, g_lw_wrote_max, g_lw_back_val,
+             rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], rec[6], rec[7],
+             rec[8], rec[9], rec[10], rec[11], rec[12], rec[13], rec[14], rec[15]);
     lines++;
 }
 
@@ -2028,6 +2054,10 @@ static void lw_plan_on_guard(void) {
     if (nv > m) nv = m;
     if (nv <= c) return;                               // already full
     *cur = nv;
+    g_lw_wrote_val = nv;
+    g_lw_wrote_max = m;
+    g_lw_back = 0;
+    InterlockedExchange(&g_lw_wrote, 1);
     if (g_lw_log < 30) {
         log_line("LW gauge: +%ld%% %g -> %g (max %g, in 99 state=%ld)", pct, c, nv, m,
                  (long)in_lw);
