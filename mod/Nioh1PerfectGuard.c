@@ -2030,7 +2030,7 @@ static void lw_diag(void) {
 #define PG_LW_SCAN_PAR_LEN 0x1400
 #define PG_LW_SCAN_CHR_LEN 0x600
 #define PG_LW_SCAN_MAX (PG_LW_SCAN_PAR_LEN / 4)
-#define PG_LW_SCAN_MIN_DELTA 5.0f
+#define PG_LW_SCAN_MIN_DELTA 0.05f
 
 static float g_lw_scan_prev[2][PG_LW_SCAN_MAX];
 static unsigned long long g_lw_scan_last[2][PG_LW_SCAN_MAX];
@@ -2053,13 +2053,13 @@ static void lw_scan_window(int w, void *base, int len, const char *tag) {
     for (int i = 0; i < len / 4; ++i) {
         float a = g_lw_scan_prev[w][i], b = cur[i];
         if (!(a == a) || !(b == b)) continue;                  // NaN
-        if (a > 1.0e6f || a < -1.0e6f || b > 1.0e6f || b < -1.0e6f) continue;
+        // Transform/position floats live in the tens of thousands and would drown the`n        // log; a gauge is small (0..1 normalised, or 0..max a few hundred).`n        if (a > 5000.0f || a < -5000.0f || b > 5000.0f || b < -5000.0f) continue;
         float d = b - a;
         if (d < 0) d = -d;
         if (d < PG_LW_SCAN_MIN_DELTA) continue;
-        if (now - g_lw_scan_last[w][i] < 5000) continue;        // per-offset throttle
+        if (now - g_lw_scan_last[w][i] < 3000) continue;        // per-offset throttle
         g_lw_scan_last[w][i] = now;
-        if (g_lw_scan_log < 500) {
+        if (g_lw_scan_log < 800) {
             log_line("LWC %s+0x%X %g -> %g", tag, PG_LW_SCAN_ZERO + i * 4, a, b);
             g_lw_scan_log++;
         }
@@ -2069,7 +2069,7 @@ static void lw_scan_window(int w, void *base, int len, const char *tag) {
 
 static void lw_scan(void) {
     static unsigned long long last = 0;
-    if (g_lw_scan_log >= 500 || !g_base) return;
+    if (g_lw_scan_log >= 800 || !g_base) return;
     unsigned long long now = now_ms();
     if (now - last < 1000) return;
     last = now;
@@ -2077,7 +2077,7 @@ static void lw_scan(void) {
     if (!player) return;
     void *param = *(void **)((char *)player + 0x240);
     lw_scan_window(0, param, PG_LW_SCAN_PAR_LEN, "param");
-    lw_scan_window(1, player, PG_LW_SCAN_CHR_LEN, "char");
+    lw_scan_window(1, player, 0x300, "char");
 }
 // Called from the VEH: reads the cached judgement, then writes the gauge field.
 //
