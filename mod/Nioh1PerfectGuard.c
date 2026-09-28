@@ -241,14 +241,13 @@ static void config_defaults(Config *c) {
     c->armor_buff = 0;
 
     c->armor_buff_ms = 5000;
-    // The 99 gauge: OFF by default again. A gameplay log proved the engine-call route
-    // has no visible effect (add() reports success but the gauge never moves -- see
-    // CHANGELOG 2.0i), so leaving it on would only make every perfect guard call game
-    // code for nothing. The `LWD` diagnostic now measures the real field; once that is
-    // known the feature writes it directly and these come back on by default.
-    c->lw_gauge_on = 0;
+    // The 99 gauge: ON by default, 10% per perfect guard in each phase. This is now a
+    // direct write to the measured field ([param+0x48], maximum shared with Ki at
+    // [param+0x44]) -- no game code is called at all, so there is nothing left to verify
+    // in the engine. See CHANGELOG 2.0j for the measurement that identified the field.
+    c->lw_gauge_on = 1;
     c->lw_gauge_percent = 10;
-    c->lw_extend_on = 0;
+    c->lw_extend_on = 1;
     c->lw_extend_percent = 10;
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
     // and unlike the timed buffs it needs no engine calls -- it only advances the
@@ -1879,12 +1878,10 @@ static void buff_watchdog_config(void) {
 #define PG_LW_FLAG_OFFSET 0x104
 #define PG_LW_REFRESH_TICKS 8                  // ~64ms on the 8ms input tick
 
-static volatile LONG g_lw_pending_pct = 0;     // parked by the handler, taken by the thread
 static volatile LONG g_lw_seen_in_state = -1;  // -1 unknown, 0/1 resolved by the thread
 static volatile LONG g_lw_seen_present = -1;   // container judge: 1/0, -1 unreadable (log only)
 static volatile LONG g_lw_seen_flag = -1;      // flag byte: 1/0, -1 unreadable (log only)
 static LONG g_lw_log = 0;
-static int g_lw_engine_ok = -1;
 
 // 1 = the engine's flag byte says the 99 state is active, 0 = it says it is not,
 // -1 = cannot tell. ReadProcessMemory on our own process, so a wrong or not-yet
@@ -1977,70 +1974,57 @@ static void lw_diag(void) {
     lines++;
 }
 
-// Called from the VEH: reads the cached judgement only -- no memory walking, no
-// engine calls, no arithmetic beyond the plan itself.
+// Called from the VEH: reads the cached judgement, then writes the gauge field.
+//
+// The engine-call route is dead (see the block comment above), so this is a plain field
+// write. Which field was *measured*, not guessed -- a gameplay log with the LWD probe
+// printed, once a second for two minutes:
+//
+//     param40=197    param44=197 param48=0      Ki full, gauge empty (start of session)
+//     param40=197    param44=197 param48=197    the gauge jumped to full in under a second
+//     param40=109.84 param44=197 param48=110.03 both drain in combat; the gauge refills
+//
+// So [param+0x48] is the 99/amrita gauge and it shares the maximum at [param+0x44] (the
+// Ki maximum): it never exceeded it in 120 samples, and it sat at 0 while Ki was full.
+// "+10% of the gauge" is therefore `cur += 0.10f * max`, clamped at max.
+//
+// Guard rails, because this writes a game field from an exception handler: the maximum
+// must look like a maximum, the current value must be inside [0, max], and the write only
+// ever *raises* the value, never above the maximum.
+#define PG_LW_GAUGE_OFF 0x48
+#define PG_LW_MAX_OFF 0x44
+#define PG_LW_CUR_MAX 100000.0f
+
 static void lw_plan_on_guard(void) {
     int in_lw = (int)InterlockedCompareExchange(&g_lw_seen_in_state, 0, 0);
     int pct = pg_lw_plan(g_cfg.lw_gauge_on, g_cfg.lw_gauge_percent,
                          g_cfg.lw_extend_on, g_cfg.lw_extend_percent, in_lw);
-    if (pct > 0) InterlockedExchange(&g_lw_pending_pct, pct);
-}
+    if (pct <= 0 || !g_base) return;
+    void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+    if (!player) return;
+    void *param = *(void **)((char *)player + 0x240);
+    if (!param) return;
 
-// Same rule as the timed-buff constructors: prove the function stamps its own state
-// id before jumping into it, because a game update that moves it would otherwise be
-// an unrecoverable jump into arbitrary code.
-static int lw_engine_verify(void) {
-    if (g_lw_engine_ok >= 0) return g_lw_engine_ok;
-    g_lw_engine_ok = 0;
-    if (!g_base) return 0;
-    const unsigned char *p =
-        (const unsigned char *)(ULONG_PTR)(g_base + PG_RVA_STATE_CTOR_AMRITA_UP);
-    int at = ctor_stamps_state_id(p, PG_CTOR_ID_SCAN, PG_STATE_ID_AMRITA_UP);
-    log_line("LW engine: the 99-gauge constructor at 0x%llX %s state id 0x%X in its "
-             "first %d bytes", (unsigned long long)(ULONG_PTR)p,
-             at >= 0 ? "stamps" : "does NOT stamp", PG_STATE_ID_AMRITA_UP,
-             PG_CTOR_ID_SCAN);
-    g_lw_engine_ok = at >= 0;
-    return g_lw_engine_ok;
-}
+    float *cur = (float *)((char *)param + PG_LW_GAUGE_OFF);
+    float *max = (float *)((char *)param + PG_LW_MAX_OFF);
+    float c = *cur, m = *max;
+    if (!(m > 0.0f) || m > PG_LW_CUR_MAX) return;      // NaN-safe
+    if (!(c >= 0.0f) || c > m) return;                 // not a gauge-shaped value
 
-// Runs on the input thread. Takes the parked percentage, adds one state node and
-// lets the engine expire it.
-static void lw_gauge_tick(void) {
-    LONG pct = InterlockedExchange(&g_lw_pending_pct, 0);
-    if (pct <= 0) return;
-    if (!buff_engine_calls_enabled()) return;
-    if (!lw_engine_verify()) return;
-    void *mgr = buff_manager();
-    if (!mgr) return;
-
-    float mag = (float)pct / 100.0f;
-    pg_state_ctor_fn ctor =
-        (pg_state_ctor_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_CTOR_AMRITA_UP);
-    pg_state_add_fn add = (pg_state_add_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_ADD);
-
-    void *obj = ctor(mgr, PG_LW_STATE_DURATION_S, mag);
-    if (!obj) {
-        if (g_lw_log < 30) {
-            log_line("LW gauge: +%ld%% FAILED (constructor returned NULL)", pct);
-            g_lw_log++;
-        }
-        return;
-    }
-    unsigned char ok = add(mgr, PG_STATE_ID_AMRITA_UP, obj, -1, 0);
+    float add = (float)pct / 100.0f * m;
+    float nv = c + add;
+    if (nv > m) nv = m;
+    if (nv <= c) return;                               // already full
+    *cur = nv;
     if (g_lw_log < 30) {
-        int seen = buff_state_present(mgr, PG_STATE_ID_AMRITA_UP, obj);
-        log_line("LW gauge: +%ld%% via AmritaGaugeUp state 0x%llX (in 99 state=%ld "
-                 "[container 0x22=%ld, flag=%ld], add()=%u, container check: %s)", pct,
-                 (unsigned long long)obj,
-                 (long)InterlockedCompareExchange(&g_lw_seen_in_state, 0, 0),
-                 (long)InterlockedCompareExchange(&g_lw_seen_present, 0, 0),
-                 (long)InterlockedCompareExchange(&g_lw_seen_flag, 0, 0),
-                 (unsigned)ok,
-                 seen == 1 ? "present" : (seen == 0 ? "NOT FOUND" : "unreadable"));
+        log_line("LW gauge: +%ld%% %g -> %g (max %g, in 99 state=%ld)", pct, c, nv, m,
+                 (long)in_lw);
         g_lw_log++;
     }
 }
+
+// (The engine-call route and its byte check were removed here: it was proven to have no
+// effect in game -- see the LWD measurement and CHANGELOG 2.0j.)
 
 // Guard cancels the player's attack action.
 //
@@ -3274,7 +3258,6 @@ static DWORD WINAPI input_thread(LPVOID param) {
         buff_tick();
         lw_refresh_state();
         lw_diag();
-        lw_gauge_tick();
         poll_hotkey();
         Sleep(8);
     }

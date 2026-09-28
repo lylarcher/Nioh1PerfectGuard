@@ -291,6 +291,26 @@ LW gauge: +30% via AmritaGaugeUp state 0x1CD4C87DC70 (in 99 state=1 [container 0
 
 **下一步**：打一局（让九十九量表涨一次、再烧一次），`LWD` 行就能定出量表到底是哪个
 字段；下一版改为**直接写那个字段**（不调游戏代码、不需要容器），再把两项默认打开。
+### 2.0j 九十九槽：改为**直接写量表字段**，两项恢复默认开（0.1.1 第二轮实机日志）
+
+上一轮证明了"调用引擎状态对象"这条路无效（2.0i），于是这一轮先把**字段测出来**：新增的
+只读 `LWD` 行（每秒一行，120 行样本）在实机上给出了明确答案：
+
+```
+param40=197    param44=197 param48=0        精力满、量表空（开局）
+param40=197    param44=197 param48=197      量表不到一秒就满
+param40=109.84 param44=197 param48=110.03   战斗中一起下降，量表回填
+```
+
+⇒ **九十九（精华 / 守护灵）量表 = `[param+0x48]`，上限与精力共用 `[param+0x44]`**
+（120 个样本里它从没超过这个上限，且精力满时它是 0）。
+
+所以两项功能改成**直接写这个 float**：`cur += N% × max`，夹在 `[0, max]` 内，只增不减，
+写前校验上限像上限、当前值在范围内 —— **不再调用任何游戏代码**，那条死路（ctor + add +
+字节校验）整体删除。两项也随之**恢复默认开**（各 10%）。
+
+日志行改为 `LW gauge: +10% 197 -> 216.7 (max 197, in 99 state=0)`，配合 `LWD` 行可直接
+核对；九项检查全绿（227 断言 / 52 标记 / 116 日志 / 12 导出 / INI 6/6）。
 ### 2.1 你在包内就能自己核对的
 
 | 做法 | 看什么 |
@@ -315,7 +335,7 @@ LW gauge: +30% via AmritaGaugeUp state 0x1CD4C87DC70 (in 99 state=1 [container 0
 | 锚点期望字节与解密镜像逐字节一致 | `python tools\test_anchors.py ..` | **4/4 一致**；输入槽推导得 `0x1B78658`，与独立已知值相符 |
 | 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **227 条断言全过** |
 | INI 编码与取值边界 + **内置默认值必须等于随包 INI** | `python tools\test_ini_encodings.py ..\mod` | **6/6** |
-| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **53/53 标记；118 条日志 0 条未解释** |
+| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **52/52 标记；116 条日志 0 条未解释** |
 | 交付文档只引用真实存在的文件 | `python tools\test_doc_paths.py ..` | 通过 |
 | 导出表 | `python tools\list_exports.py ..\mod\Nioh1PerfectGuard.dll` | 12 个 `PG_*` |
 | **测试过的算术 == 发货的算术** | `python tools\test_logic_digest.py ..` | 两个构建的数值指纹一致 |

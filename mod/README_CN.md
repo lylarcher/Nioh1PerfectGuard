@@ -134,8 +134,8 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **精防后移速增益**（0 = 关）。想启用设成 4。⚠ 本轮默认关：这是唯一调用游戏代码的功能，尚未实机验证 |
 | `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **精防后承受伤害降低**（0 = 关）。想启用设成 4 |
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **霸体**（已决定不使用，见下） |
-| `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` | **0** / 10 | **九十九槽（精华量表 / 守护灵槽）积累**：每次精防加 N% 槽，**当前默认关**、默认 10% |
-| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **0** / 10 | **九十九状态中续烧条**：在九十九状态下每次精防续 N%，**当前默认关**、默认 10% |
+| `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` | **1** / 10 | **九十九槽（精华量表 / 守护灵槽）积累**：每次精防加 N% 槽，**默认开**、默认 10% |
+| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **1** / 10 | **九十九状态中续烧条**：在九十九状态下每次精防续 N%，**默认开**、默认 10% |
 | `CancelActionOnGuard` | **1** | **单按防御键取消当前动作**（0 = 关）：攻击/武技、喝药、上阴阳符、上咒术忍术、丢道具都算。防御+X/Y/A 这类组合键**不算**；移动不影响 |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | 哪些键算攻击键 / 与防御键相隔多少毫秒内算“组合键” |
 | `CancelActionStrictHold` / `CancelActionFrames` / `CancelActionRecentMs` | 0 / 30 / **0** | 严格模式（按着就不取消）/ 动画帧推进量 / **0 = 任何防御按下都取消**（不区分精防与普通防御）|
@@ -151,8 +151,8 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 
 | 开关 | 何时生效 | 默认 |
 | --- | --- | --- |
-| `LivingWeaponGaugeOnGuard`（+ `LivingWeaponGaugePercent`） | **不在**九十九状态时，每次精防给量表加 N% | **关** / 10 |
-| `LivingWeaponExtendOnGuard`（+ `LivingWeaponExtendPercent`） | **在**九十九状态时，每次精防续 N%（烧条） | **关** / 10 |
+| `LivingWeaponGaugeOnGuard`（+ `LivingWeaponGaugePercent`） | **不在**九十九状态时，每次精防给量表加 N% | **开** / 10 |
+| `LivingWeaponExtendOnGuard`（+ `LivingWeaponExtendPercent`） | **在**九十九状态时，每次精防续 N%（烧条） | **开** / 10 |
 
 机制上它们不是"改字段"，而是**调用引擎自己的那个状态对象**
 （`Character::AddStateObjectAmritaGaugeUp`，构造函数 `0x79E870`，状态 id `0x20`）：
