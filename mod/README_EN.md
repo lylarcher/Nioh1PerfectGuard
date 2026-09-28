@@ -1,4 +1,4 @@
-# Nioh 1 · Perfect Guard — v0.1.1
+# Nioh 1 · Perfect Guard — v0.1.2
 
 Timed-guard rewards for *Nioh: Complete Edition* (`nioh.exe` 1.24.8), in the spirit
 of Nioh 3's Guard Parry.
@@ -95,7 +95,7 @@ apply **within about a second** while the game is running.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `Enabled` | 1 | Master switch. 0 = no breakpoints are armed |
-| `WindowMs` | 250 | Guard window in milliseconds |
+| `WindowMs` | **450** | Guard window in ms, from the fresh press (widened from 250 on 2026-09-28) |
 | `CancelRecovery` | 0 | **Experimental** cancel of guard recovery (see below) |
 | `CancelRecoveryFrames` | 30 | Frames advanced when cancelling |
 | `RequireTimelyGuard` | 1 | 1 = only a fresh press within `WindowMs` counts |
@@ -115,8 +115,8 @@ apply **within about a second** while the game is running.
 | `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **Move-speed buff after a perfect guard** (0 = off). Set to 4 to enable. ⚠ Off this round: it is the only feature that calls game code and it is not yet verified in game |
 | `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **Damage-taken reduction after a perfect guard** (0 = off). Set to 4 to enable |
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **Armour** (dropped by decision, see below) |
-| `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` | **0** / 10 | **99 gauge (amrita / guardian-spirit gauge) accumulation**: +N% per perfect guard; off by default, 10% when on |
-| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **0** / 10 | **Extend the burning gauge while the 99 state is active**: +N% per perfect guard; off by default, 10% when on |
+| `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` | **1** / 10 | **99 gauge (amrita / guardian-spirit gauge) accumulation**: +N% per perfect guard; **on by default**, 10% |
+| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **1** / 10 | **Extend the burning gauge while the 99 state is active**: +N% per perfect guard; **on by default**, 10% |
 | `CancelActionOnGuard` | **1** | **A pure guard press cancels the current action** (0 = off): attacks/skills, drinking and using items, onmyo talismans, ninjutsu, throwing items. Guard+X/Y/A is a combination and does not cancel; movement is irrelevant |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | Which buttons count as attacks / how close a press counts as a combination |
 | `CancelActionStrictHold` / `CancelActionFrames` / `CancelActionRecentMs` | 0 / 30 / **0** | Strict “held blocks” mode / motion frames advanced / **0 = any guard press cancels** (perfect and normal blocks alike) |
@@ -224,8 +224,8 @@ lower `KiTopUpPreEventMs` (e.g. 50) or set it to `0`.
 
 | Switch | When it applies | Default |
 | --- | --- | --- |
-| `LivingWeaponGaugeOnGuard` (+ `LivingWeaponGaugePercent`) | while **not** in the 99 state: +N% gauge per perfect guard | off / 10 |
-| `LivingWeaponExtendOnGuard` (+ `LivingWeaponExtendPercent`) | while **in** the 99 state: +N% per perfect guard (extends the burning gauge) | off / 10 |
+| `LivingWeaponGaugeOnGuard` (+ `LivingWeaponGaugePercent`) | while **not** in the 99 state: +N% gauge per perfect guard | **on** / 10 |
+| `LivingWeaponExtendOnGuard` (+ `LivingWeaponExtendPercent`) | while **in** the 99 state: +N% per perfect guard (extends the burning gauge) | **on** / 10 |
 
 Mechanically these do not write a field: they call the engine's own state object
 (`Character::AddStateObjectAmritaGaugeUp`, constructor `0x79E870`, state id `0x20`),

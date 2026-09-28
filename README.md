@@ -16,7 +16,7 @@ player-side rewards. Chinese version: [`README-CN.md`](README-CN.md).
 
 | Feature | Shipped state | Notes |
 | --- | --- | --- |
-| Perfect-guard detection | on | guard **press** rising edge within `WindowMs` (250) of the block |
+| Perfect-guard detection | on | guard **press** rising edge within `WindowMs` (450) of the block |
 | Ki cost reduction on block | on | `KiDamageReductionPercent=100` |
 | Ki recovery | on | `KiRecoveryMode=3` (a sixth of maximum Ki) |
 | Enemy Ki / HP damage | off | `EnemyKiDamage` / `EnemyHpDamage`, range-gated, never guesses a target |

@@ -75,7 +75,7 @@ STATUS ACTIVE anchors=4/4 ...
 
 | I want to… | Change |
 | --- | --- |
-| widen / narrow the perfect-guard window | `WindowMs` (250) |
+| widen / narrow the perfect-guard window | `WindowMs` (450) |
 | keyboard player: guard key does nothing | `LearnButtons=1` → press your guard key → copy `LEARN key VK=0x..` into `GuardKeyVK` → set it back to 0 |
 | change the Ki cost reduction | `KiDamageReductionPercent` (100 = free blocking) |
 | change how Ki comes back | `KiRecoveryMode` (0 none / 1 refund / 2 fixed / **3 one sixth of max**) |

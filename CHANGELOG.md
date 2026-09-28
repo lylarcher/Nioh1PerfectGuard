@@ -2,7 +2,7 @@
 
 > 作者：**lylarcher** ｜ 源码仓库：<https://github.com/lylarcher/Nioh1PerfectGuard>
 > 目标游戏：**仁王1 完全版**（`nioh.exe` 1.24.8）
-> 版本：`0.1.1-nioh1`
+> 版本：`0.1.2-nioh1`
 > 本文件说明**哪些已经验证过**、**修过什么**、以及**还剩哪几件事需要你实机确认**。
 
 ---
@@ -197,14 +197,14 @@ KITRACE ki=97.59/105 (changed: ki)                      <- 638ms 后自己回上
 回归：新增 13 条断言（200 → **213**，含"事件前基准必须取到扣精前的值"与
 "半额减免只补一半"两条端到端用例）。
 
-### 2.0g 九十九槽（精华量表 / 守护灵槽）：两个新开关（0.1.1，默认关）
+### 2.0g 九十九槽（精华量表 / 守护灵槽）：两个新开关（0.1.2，**默认开**）
 
 两项新功能，共用一个写入：
 
 | 开关 | 何时生效 | 默认 |
 | --- | --- | --- |
-| `LivingWeaponGaugeOnGuard` + `LivingWeaponGaugePercent` | **不在**九十九状态时每次精防给量表加 N% | 关 / **10** |
-| `LivingWeaponExtendOnGuard` + `LivingWeaponExtendPercent` | **在**九十九状态时每次精防续 N%（烧条） | 关 / **10** |
+| `LivingWeaponGaugeOnGuard` + `LivingWeaponGaugePercent` | **不在**九十九状态时每次精防给量表加 N% | **开** / **10** |
+| `LivingWeaponExtendOnGuard` + `LivingWeaponExtendPercent` | **在**九十九状态时每次精防续 N%（烧条） | **开** / **10** |
 
 **实现路线不是"改字段"，而是调用引擎自己的状态对象**。定位过程（RE_NOTES §4.55）：
 RTTI 里有 `Character::AddStateObjectAmritaGaugeUp` / `AmritaGaugeRecover` /
@@ -237,6 +237,25 @@ RTTI 里有 `Character::AddStateObjectAmritaGaugeUp` / `AmritaGaugeRecover` /
 
 判据/文档：新增 `pg_lw_plan()`（纯逻辑，14 条断言）与两条日志
 （`LW engine:` 一次性校验、`LW gauge:` 每次调用），验收文档有专节。
+
+### 2.0h 0.1.2：两个默认值按使用手感调整（九十九两项改默认开、精防窗口 250ms → 450ms）
+
+两处默认值改动，都是**使用手感**决定，不是修 bug：
+
+| 键 | 旧默认 | 新默认 | 为什么 |
+| --- | --- | --- | --- |
+| `LivingWeaponGaugeOnGuard` | 0（关） | **1（开）** | 要求默认开启：精防攒九十九槽，默认每次 10% |
+| `LivingWeaponExtendOnGuard` | 0（关） | **1（开）** | 同上：九十九状态中精防续烧条，默认每次 10% |
+| `WindowMs` | 250 | **450** | 原计划的 250ms 判定区间偏窄，按手感调宽；判定仍是"防御键**按下沿**起算、按住不续窗" |
+
+**这意味着默认配置下每次精防都会调用游戏代码**（`AmritaGaugeUp` 状态对象那条路，与限时
+增益同一机制）。风险与限时增益一致：**安装**路径已在实机跑过（`add()=1`、游戏继续运行），
+**移除**路径实测会崩所以永不调用（时长交给引擎过期）。要关掉这条路：把两个开关设 0，
+或用 `DiagDisable` 的位 16 与限时增益一起关。日志里每次调用都有 `LW gauge:` 一行，含
+`add()` 返回值与容器回读结果。
+
+窗口调宽到 450ms 的副作用也是显而易见的：**更容易判定成精防**（按下防御键后 450ms 内挨打
+都算），奖励因此更频繁。想恢复原来的手感就把 `WindowMs` 改回 250。
 
 ### 2.1 你在包内就能自己核对的
 
@@ -351,7 +370,7 @@ RTTI 里有 `Character::AddStateObjectAmritaGaugeUp` / `AmritaGaugeRecover` /
 
 | 方案承诺 | 实际 |
 | --- | --- |
-| 精防窗口 250ms，从**新按下**起算 | ✅ `WindowMs=250`，上升沿判定（按住不放不会续窗） |
+| 精防窗口 250ms，从**新按下**起算 | ✅ 按原计划实现；2026-09-28 按使用手感把默认值调宽到 **450ms**（`WindowMs`），上升沿与"按住不续窗"不变 |
 | 自身回精：不回 / 最大/6 / 固定 / 返还本次 | ✅ `KiRecoveryMode` 0/1/2/3 |
 | 格挡耗精减免 0–100% | ✅ `KiDamageReductionPercent` |
 | 对敌当前精力伤害 | ✅ `EnemyKiDamage`（默认 0，不写内存） |

@@ -35,7 +35,7 @@
 // tests cannot drift away from what ships.
 #include "pg_logic.h"
 
-#define MOD_VERSION "0.1.1-nioh1"
+#define MOD_VERSION "0.1.2-nioh1"
 #define MAX_TARGETS 4
 #define MAX_ARMED 8192
 #define LOG_CAP (MAX_PATH * 2)
@@ -204,7 +204,7 @@ static FILETIME g_ini_mtime = {0, 0};
 static void config_defaults(Config *c) {
     memset(c, 0, sizeof(*c));
     c->enabled = 1;
-    c->window_ms = 250;
+    c->window_ms = 450;
     c->cancel_recovery = 0;        // unverified: off unless the player opts in
     c->cancel_recovery_frames = 30.0f;
     c->ki_reduction_percent = 100;
@@ -241,11 +241,12 @@ static void config_defaults(Config *c) {
     c->armor_buff = 0;
 
     c->armor_buff_ms = 5000;
-    // The 99 gauge: off by default (it calls game code, like the timed buffs), and
-    // 10% per perfect guard in each phase, which is what was asked for.
-    c->lw_gauge_on = 0;
+    // The 99 gauge: on by default (asked for), 10% per perfect guard in each phase.
+    // It calls game code, like the timed buffs, so DiagDisable bit 16 switches it off
+    // together with them, and the flag/counter probes report every call.
+    c->lw_gauge_on = 1;
     c->lw_gauge_percent = 10;
-    c->lw_extend_on = 0;
+    c->lw_extend_on = 1;
     c->lw_extend_percent = 10;
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
     // and unlike the timed buffs it needs no engine calls -- it only advances the

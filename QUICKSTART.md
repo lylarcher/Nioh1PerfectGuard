@@ -67,7 +67,7 @@ STATUS ACTIVE anchors=4/4 ...
 
 | 想做什么 | 改哪个键 |
 | --- | --- |
-| 精防窗口太窄 / 太宽 | `WindowMs`（默认 250）|
+| 精防窗口太窄 / 太宽 | `WindowMs`（默认 450）|
 | 键鼠玩家：防御键没反应 | `LearnButtons=1` → 按一下防御键 → 抄 `LEARN key VK=0x..` 到 `GuardKeyVK` → 改回 0 |
 | 觉得减免不够 / 过头 | `KiDamageReductionPercent`（默认 100 = 完全不耗精）|
 | 回精方式 | `KiRecoveryMode`（0 不回 / 1 返还本次 / 2 固定 / **3 最大精力 1/6**）|
