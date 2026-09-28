@@ -1913,8 +1913,20 @@ static int lw_resolve(void) {
     int flag = lw_flag_byte();
     void *mgr = buff_manager();
     int present = mgr ? buff_state_present(mgr, PG_STATE_ID_CALL_SPIRIT, NULL) : -1;
+    // The field that was 1 for the whole burning window in the second gameplay log: while
+    // the 99 state is up the gauge drained monotonically (178.5 -> 110.03 in seven
+    // seconds) and [param+0x4C] was 1 for exactly that window, then went back to 0. It is
+    // the most direct evidence available -- the container id 0x22 never appeared at all
+    // in that session, and the inferred global flag byte reads 1 permanently.
+    int burning = 0;
+    if (g_base) {
+        void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+        void *param = player ? *(void **)((char *)player + 0x240) : NULL;
+        if (param) burning = *(int *)((char *)param + 0x4C) != 0;
+    }
     InterlockedExchange(&g_lw_seen_present, present);
     InterlockedExchange(&g_lw_seen_flag, flag);
+    if (burning) return 1;              // burning the gauge: unambiguously in the 99 state
     if (present >= 0) return present;
     return flag;
 }
