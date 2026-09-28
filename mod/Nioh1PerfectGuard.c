@@ -2011,7 +2011,74 @@ static void lw_diag(void) {
              rec[8], rec[9], rec[10], rec[11], rec[12], rec[13], rec[14], rec[15]);
     lines++;
 }
+// ---------------------------------------------------------------- change scanner --
+// The one measurement that cannot be fooled by a wrong guess.
+//
+// Four rounds guessed which field is the 99 gauge: the engine-call route did nothing,
+// [param+0x48] read "full" while the visible gauge was one third full, and the record
+// table was all zeros. What the operator *does* know is an action that moves the gauge:
+// eating one small spirit stone. So instead of guessing, snapshot two float windows once
+// a second and print only the offsets whose value actually moved by a meaningful amount.
+// One stone then prints the gauge's offset and the size of the step directly; burning it
+// (99 state) prints the drain; and nothing else has to be assumed.
+//
+// Windows: the param object ([[char+0x240]]) 0x00..0x1400 -- it holds the Ki pair at
+// +0x40, the resource table at +0xBB0 and the state container at +0x10B0 -- and the
+// character object's low 0x600 bytes. Per-offset throttle (5s) keeps a continuously
+// draining field from eating the whole log.
+#define PG_LW_SCAN_ZERO 0x00
+#define PG_LW_SCAN_PAR_LEN 0x1400
+#define PG_LW_SCAN_CHR_LEN 0x600
+#define PG_LW_SCAN_MAX (PG_LW_SCAN_PAR_LEN / 4)
+#define PG_LW_SCAN_MIN_DELTA 5.0f
 
+static float g_lw_scan_prev[2][PG_LW_SCAN_MAX];
+static unsigned long long g_lw_scan_last[2][PG_LW_SCAN_MAX];
+static int g_lw_scan_valid[2];
+static LONG g_lw_scan_log = 0;
+
+static void lw_scan_window(int w, void *base, int len, const char *tag) {
+    if (!base || len / 4 > PG_LW_SCAN_MAX) return;
+    float cur[PG_LW_SCAN_MAX];
+    SIZE_T got = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), (char *)base + PG_LW_SCAN_ZERO, cur,
+                           (SIZE_T)len, &got) || got != (SIZE_T)len)
+        return;
+    if (!g_lw_scan_valid[w]) {
+        memcpy(g_lw_scan_prev[w], cur, (size_t)len);
+        g_lw_scan_valid[w] = 1;
+        return;
+    }
+    unsigned long long now = now_ms();
+    for (int i = 0; i < len / 4; ++i) {
+        float a = g_lw_scan_prev[w][i], b = cur[i];
+        if (!(a == a) || !(b == b)) continue;                  // NaN
+        if (a > 1.0e6f || a < -1.0e6f || b > 1.0e6f || b < -1.0e6f) continue;
+        float d = b - a;
+        if (d < 0) d = -d;
+        if (d < PG_LW_SCAN_MIN_DELTA) continue;
+        if (now - g_lw_scan_last[w][i] < 5000) continue;        // per-offset throttle
+        g_lw_scan_last[w][i] = now;
+        if (g_lw_scan_log < 500) {
+            log_line("LWC %s+0x%X %g -> %g", tag, PG_LW_SCAN_ZERO + i * 4, a, b);
+            g_lw_scan_log++;
+        }
+    }
+    memcpy(g_lw_scan_prev[w], cur, (size_t)len);
+}
+
+static void lw_scan(void) {
+    static unsigned long long last = 0;
+    if (g_lw_scan_log >= 500 || !g_base) return;
+    unsigned long long now = now_ms();
+    if (now - last < 1000) return;
+    last = now;
+    void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+    if (!player) return;
+    void *param = *(void **)((char *)player + 0x240);
+    lw_scan_window(0, param, PG_LW_SCAN_PAR_LEN, "param");
+    lw_scan_window(1, player, PG_LW_SCAN_CHR_LEN, "char");
+}
 // Called from the VEH: reads the cached judgement, then writes the gauge field.
 //
 // The engine-call route is dead (see the block comment above), so this is a plain field
@@ -3305,6 +3372,7 @@ static DWORD WINAPI input_thread(LPVOID param) {
         buff_tick();
         lw_refresh_state();
         lw_diag();
+        lw_scan();
         poll_hotkey();
         Sleep(8);
     }
