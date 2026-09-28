@@ -1,4 +1,4 @@
-# Nioh 1 · Perfect Guard — v0.1.0
+# Nioh 1 · Perfect Guard — v0.1.1
 
 Timed-guard rewards for *Nioh: Complete Edition* (`nioh.exe` 1.24.8), in the spirit
 of Nioh 3's Guard Parry.
@@ -95,7 +95,7 @@ apply **within about a second** while the game is running.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `Enabled` | 1 | Master switch. 0 = no breakpoints are armed |
-| `WindowMs` | 250 | Guard window in milliseconds |
+| `WindowMs` | **450** | Guard window in ms, from the fresh press (widened from 250 on 2026-09-28) |
 | `CancelRecovery` | 0 | **Experimental** cancel of guard recovery (see below) |
 | `CancelRecoveryFrames` | 30 | Frames advanced when cancelling |
 | `RequireTimelyGuard` | 1 | 1 = only a fresh press within `WindowMs` counts |
@@ -106,6 +106,7 @@ apply **within about a second** while the game is running.
 | `KiTrace` | 1 | Sample both candidate Ki fields (temporary diagnostic) |
 | `KiDamageReductionPercent` | 100 | Guard Ki cost reduction, 0–100. 100 = free blocking |
 | `KiTopUp` | 1 | Also top the visible Ki field back up — see "two reduction mechanisms" below. **Leave at 1** |
+| `KiTopUpPreEventMs` | 100 | How far back (ms) the top-up's reference Ki value is taken from (0 = disabled). The flag source fires *after* the charge, so a wrong reference refunds nothing — see below |
 | `KiRecoveryMode` | 3 | 0 none / 1 refund cost / 2 fixed / **3 one sixth of max Ki** |
 | `FixedRecovery` | 50 | Used by mode 2 |
 | `HpRecoveryMode` | 1 | **HP restore on a perfect guard**: 0 off / **1 percent of max HP (default)** / 2 fixed / 3 both |
@@ -114,6 +115,8 @@ apply **within about a second** while the game is running.
 | `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **Move-speed buff after a perfect guard** (0 = off). Set to 4 to enable. ⚠ Off this round: it is the only feature that calls game code and it is not yet verified in game |
 | `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **Damage-taken reduction after a perfect guard** (0 = off). Set to 4 to enable |
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **Armour** (dropped by decision, see below) |
+| `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` | **1** / 10 | **99 gauge (amrita / guardian-spirit gauge) accumulation**: +N% per perfect guard; **on by default**, 10% |
+| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **1** / 10 | **Extend the burning gauge while the 99 state is active**: +N% per perfect guard; **on by default**, 10% |
 | `CancelActionOnGuard` | **1** | **A pure guard press cancels the current action** (0 = off): attacks/skills, drinking and using items, onmyo talismans, ninjutsu, throwing items. Guard+X/Y/A is a combination and does not cancel; movement is irrelevant |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | Which buttons count as attacks / how close a press counts as a combination |
 | `CancelActionStrictHold` / `CancelActionFrames` / `CancelActionRecentMs` | 0 / 30 / **0** | Strict “held blocks” mode / motion frames advanced / **0 = any guard press cancels** (perfect and normal blocks alike) |
@@ -193,10 +196,59 @@ Two different moments can mean "the player blocked". `BlockEventSource` picks on
 
 1. **scale** the amount the engine is about to subtract at the cost site — only
    available when the source is `0` (or auto decided the cost site works);
-2. **top up** the visible Ki by `reduction%` of the loss afterwards — controlled by
-   `KiTopUp`, and effective with **either** source.
+2. **top up** the visible Ki by `reduction%` of the loss — controlled by `KiTopUp`.
 
-So with the flag source, reduction depends entirely on `KiTopUp=1` (on by default).
+**Both depend on the order of events.** The cost site fires *before* the engine
+subtracts, so there the live value is the correct reference. The flag site fires
+*after*: in a real session the log showed `ki=71.03/105` in the very same
+millisecond as the perfect guard, down from a full 105. A reference read at event
+time therefore already contains the charge, the measured loss is zero, and the
+top-up silently does nothing — which is exactly what a user reported ("everything
+works except the Ki refund").
+
+So under the flag source the reference comes from **`KiTopUpPreEventMs`** (100ms by
+default): the 8ms input tick keeps a ring of samples and the reference is the
+highest value seen inside that window, i.e. from before the charge. In the log:
+
+- `KIREF pre-event reference 105 vs live 71.03` → the reference is right;
+- `KIV-FLAG ... handed back 33.97/100%` → that 33.97 was actually given back.
+
+Trade-off: an unrelated spend that lands inside the window is refunded too — and the
+likeliest case is this mod's own cancel playstyle (attack, then press guard to cancel
+it; the cost is charged the moment the swing starts). If the two are closer together
+than the window, that swing's Ki is refunded as well. `KIREF` prints the reference it
+adopted: if it is clearly above your real Ki before the block, that is what happened —
+lower `KiTopUpPreEventMs` (e.g. 50) or set it to `0`.
+
+### The 99 gauge (amrita / guardian-spirit gauge): two switches
+
+| Switch | When it applies | Default |
+| --- | --- | --- |
+| `LivingWeaponGaugeOnGuard` (+ `LivingWeaponGaugePercent`) | while **not** in the 99 state: +N% gauge per perfect guard | **on** / 10 |
+| `LivingWeaponExtendOnGuard` (+ `LivingWeaponExtendPercent`) | while **in** the 99 state: +N% per perfect guard (extends the burning gauge) | **on** / 10 |
+
+Mechanically these do not write a field: they call the engine's own state object
+(`Character::AddStateObjectAmritaGaugeUp`, constructor `0x79E870`, state id `0x20`),
+whose apply is `gauge = min(gauge + magnitude, 1.0)` on a gauge normalised to 0..1. So
+"10% of the gauge" is the magnitude `0.10` and the engine does the clamping. Whether the
+99 state is active is decided by **two sources OR-ed**: ① the engine's state container
+(`[[char+0x240]]+0x10B0`) holding the `CallSpirit` state object (state id `0x22`) — the
+primary judge; ② the engine's activation flag byte (the one
+`Player::SetTsukumoWeaponActiveFlag` writes). Either one counting as "active" is enough;
+if neither can be read the mod treats it as inactive (accumulate), so a wrong reading can
+never silently disable accumulation.
+
+Every call is logged:
+
+```
+LW engine: the 99-gauge constructor at 0x... stamps state id 0x20 in its first 128 bytes
+LW gauge: +10% via AmritaGaugeUp state 0x... (in 99 state=0 [container 0x22=0, flag=-1], add()=1, container check: present)
+```
+
+`add()=1` and `present` mean the engine accepted the state object. Like the timed buffs
+this path calls game code (switched off together by `DiagDisable` bit 16) and it
+**never calls the removal path** (that one crashes), leaving the tiny duration to expire
+on its own.
 
 ### Encoding
 
@@ -358,6 +410,12 @@ act on yourself, with no new build:
 
 Switching the top-up off does not cost you the diagnosis: the mod keeps sampling
 and keeps printing `KIV`.
+
+> **`KIV` does not apply under the flag source** (no charge is visible there) — look
+> at `KIV-FLAG` instead: `reference` is the pre-charge value and `handed back` is
+> what was actually refunded. If a block produces neither `KIREF` nor `KIV-FLAG`,
+> the charge landed outside the `KiTopUpPreEventMs` window; raise it (see the
+> trade-off above).
 
 The first ten perfect guards each produce one line — no arithmetic required.
 

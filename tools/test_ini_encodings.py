@@ -71,7 +71,7 @@ d = ctypes.CDLL(os.path.join(mod, "Nioh1PerfectGuard.dll"))
 d.PG_SelfTest.restype = ctypes.c_char_p
 out = d.PG_SelfTest().decode()
 print("   ", out)
-results.append("window=250" in out and "reduction=100" in out)
+results.append("window=450" in out and "reduction=100" in out)
 
 
 # The compiled defaults are what the mod runs on when the INI is missing or

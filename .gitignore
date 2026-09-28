@@ -56,3 +56,11 @@ Nioh1PerfectGuard.state
 _work/**/*.log
 _work/**/out.txt
 _work/*.log
+
+# ── 调查草稿：脚本与它的输出都不入库（_work/zig_url.txt 是 build.ps1 需要的例外）──
+/_work/*.py
+/_work/*.txt
+!/_work/zig_url.txt
+/_work/*_states.json
+/_work/*_ctors.json
+/_work/*.json

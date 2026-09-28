@@ -1,4 +1,4 @@
-# 仁王 1 · 精准防御（精防）MOD — v0.1.0
+# 仁王 1 · 精准防御（精防）MOD — v0.1.1
 
 在《仁王 1 完全版》（Nioh: Complete Edition，`nioh.exe` 1.24.8）中实现类似仁王 3
 「Guard Parry / 精准防御」的格挡收益。
@@ -89,7 +89,7 @@ INI 内每一项都有中英双语注释、取值范围和默认值。大多数�
 | 键 | 默认 | 含义 |
 | --- | --- | --- |
 | `Enabled` | 1 | 总开关。0 = 不安装任何断点 |
-| `WindowMs` | 250 | 精防窗口（毫秒）。锚点 A 接线后启用 |
+| `WindowMs` | **450** | 精防窗口（毫秒），从"新按下防御键"起算（2026-09-28 起由 250 调宽） |
 | `CancelRecovery` | 0 | 精防后提前接续（**实验性，默认关**，见下） |
 | `CancelRecoveryFrames` | 30 | 接续时推进的动画帧数 |
 | `RequireTimelyGuard` | 1 | 1 = 仅 WindowMs 内新按下防御的格挡算精防；0 = 每次格挡都算 |
@@ -125,6 +125,7 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 常见 VK：左 Shift=160(0xA0)、右 Shift=161、Ctrl=17、空格=32、鼠标左键=1。
 | `KiDamageReductionPercent` | 100 | 格挡耗精减免 0～100%。**100 = 完全免耗精** |
 | `KiTopUp` | 1 | 是否额外把可见精力**补回**。见下方「两条减免机制」——**一般保持 1** |
+| `KiTopUpPreEventMs` | 100 | 补回时的基准精力往前回溯多少毫秒（0 = 关闭）。旗标事件源在扣精**之后**才触发，基准取错就一分钱都不还，见下方「两条减免机制」 |
 | `KiRecoveryMode` | 3 | 0 不回精 / 1 返还本次消耗 / 2 固定值 / **3 回复最大精力的 1/6** |
 | `FixedRecovery` | 50 | 模式 2 使用的固定回精量 |
 | `HpRecoveryMode` | 1 | **精防回血**：0 关 / **1 按最大 HP 百分比（默认）** / 2 固定值 / 3 两者相加 |
@@ -133,6 +134,8 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **精防后移速增益**（0 = 关）。想启用设成 4。⚠ 本轮默认关：这是唯一调用游戏代码的功能，尚未实机验证 |
 | `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **精防后承受伤害降低**（0 = 关）。想启用设成 4 |
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **霸体**（已决定不使用，见下） |
+| `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` | **1** / 10 | **九十九槽（精华量表 / 守护灵槽）积累**：每次精防加 N% 槽，**默认开**、默认 10% |
+| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **1** / 10 | **九十九状态中续烧条**：在九十九状态下每次精防续 N%，**默认开**、默认 10% |
 | `CancelActionOnGuard` | **1** | **单按防御键取消当前动作**（0 = 关）：攻击/武技、喝药、上阴阳符、上咒术忍术、丢道具都算。防御+X/Y/A 这类组合键**不算**；移动不影响 |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | 哪些键算攻击键 / 与防御键相隔多少毫秒内算“组合键” |
 | `CancelActionStrictHold` / `CancelActionFrames` / `CancelActionRecentMs` | 0 / 30 / **0** | 严格模式（按着就不取消）/ 动画帧推进量 / **0 = 任何防御按下都取消**（不区分精防与普通防御）|
@@ -143,6 +146,32 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `KiTrace` | 1 | 诊断：持续采样两个候选精力字段（**验收完可以改 0**） |
 | `BlockEventSource` | 2 | **哪个事件代表"玩家格挡成功"**：`2`=自动（推荐）/ `0`=只用扣精点 / `1`=只用旗标点。见下节 |
 | `DiagDisable` | 0 | **诊断位掩码，平时保持 0**：`1`=不装断点 / `2`=不启动输入线程 / `4`=开启"滚动重装"（**已知会弄崩游戏**）/ `8`=不跑自检 |
+
+### 九十九槽（精华量表 / 守护灵槽）两个开关
+
+| 开关 | 何时生效 | 默认 |
+| --- | --- | --- |
+| `LivingWeaponGaugeOnGuard`（+ `LivingWeaponGaugePercent`） | **不在**九十九状态时，每次精防给量表加 N% | **开** / 10 |
+| `LivingWeaponExtendOnGuard`（+ `LivingWeaponExtendPercent`） | **在**九十九状态时，每次精防续 N%（烧条） | **开** / 10 |
+
+机制上它们不是"改字段"，而是**调用引擎自己的那个状态对象**
+（`Character::AddStateObjectAmritaGaugeUp`，构造函数 `0x79E870`，状态 id `0x20`）：
+它的 apply 就是 `gauge = min(gauge + 幅度, 1.0)`，量表 0～1 归一化，所以
+"10% 槽"＝幅度 `0.10`，上限由引擎夹紧。**是否在九十九状态**由两路相或判断：① 引擎状态
+容器（`[[char+0x240]]+0x10B0`）里存在 `CallSpirit` 状态对象（状态 id `0x22`）—— 主判据；
+② 引擎的激活标志字节（`Player::SetTsukumoWeaponActiveFlag` 写的那个字节）。任一路为真即
+算"在"，两路都读不到则按"不在"处理（走攒槽），所以判据读错**不会**让攒槽静默失效。
+
+日志里每次调用都会写明：
+
+```
+LW engine: the 99-gauge constructor at 0x... stamps state id 0x20 in its first 128 bytes
+LW gauge: +10% via AmritaGaugeUp state 0x... (in 99 state=0 [container 0x22=0, flag=-1], add()=1, container check: present)
+```
+
+`add()=1` 且 `present` ＝ 引擎收下了这个状态对象。与限时增益一样，这条路会调用游戏
+代码（由 `DiagDisable` 位 16 统一关闭），并且**永不调用"移除"**（那条路实测会崩），
+时长交给引擎自己过期。
 
 ### 事件源会自动记住结论（Nioh1PerfectGuard.state）
 
@@ -160,15 +189,30 @@ MOD 有**两个**可以代表"玩家格挡成功"的时机，各有取舍，`Blo
 | 取值 | 事件 | 优点 | 代价 |
 | --- | --- | --- | --- |
 | `0` | 格挡扣精点 | 最精确；**只有这里能缩放引擎真正要扣的精力** | 引擎自己有三道前置条件，不满足时整段代码不执行，什么都看不到 |
-| `1` | "攻击被格挡"旗标点 | 触发条件宽得多；已实测能在本游戏里触发 | 拿不到扣精量：`KiRecoveryMode` 只能是 0 或 3，扣精缩放不生效，`KIV` 不输出 |
+| `1` | "攻击被格挡"旗标点 | 触发条件宽得多；已实测能在本游戏里触发 | 拿不到扣精量：`KiRecoveryMode` 只能是 0 或 3，扣精缩放不生效，`KIV` 不输出（改为输出 `KIV-FLAG`） |
 | `2`（默认） | **自动** | 先试扣精点；若它从未触发而旗标点已看到 3 次玩家格挡，就改用旗标点，**并在日志里说明**；扣精点后来出现会自动切回 | 无 |
 
 **两条减免机制**（`KiDamageReductionPercent`）：
 
 1. 在扣精点**缩放**引擎要扣的量 —— **只有事件源为 `0`（或自动模式判定扣精点可用）时才有**；
-2. 在事件发生后把可见精力**补回**损失的 `减免%` —— 由 `KiTopUp` 控制，**两种事件源都有效**。
+2. 把可见精力**补回**损失的 `减免%` —— 由 `KiTopUp` 控制。
 
-所以如果你用的是旗标事件源，减免**完全依赖 `KiTopUp=1`**（默认已开）。
+**这两条都要看清时间顺序**：扣精点的事件发生在引擎扣精**之前**，所以那里
+"现读的精力"就是正确的基准；而旗标点发生在扣精**之后**（实测：精防那一毫秒
+日志里已经是 `ki=71.03/105`，之前是满的 105），若还在事件时刻现读，基准里就
+已经含了这次扣除，损失恒为 0、补回等于没开。
+
+所以旗标事件源的基准取自 **`KiTopUpPreEventMs`**（默认 100ms）窗口内的最高精力
+值 —— 由 8ms 的输入线程持续记录样本，事件发生时取扣精之前的值。日志里：
+
+- `KIREF pre-event reference 105 vs live 71.03` → 基准取对了；
+- `KIV-FLAG ... handed back 33.97/100%` → 已经把这 33.97 还回去了。
+
+代价：若某次与格挡无关的消耗恰好落在窗口内，它也会被当作格挡耗精补回 ——
+**最可能撞上的正是本 MOD 自己的防御取消打法**（先出一刀、再按防御取消，出刀
+瞬间就扣了精）：两者相隔不到窗口时，那一刀的精耗会被一起补回。`KIREF` 行会
+打出取到的基准值，若明显高于格挡前的实际精力就是这个情况，把
+`KiTopUpPreEventMs` 调小（例如 50）或设 `0` 关闭。
 
 **非法值会被拒绝并保留上一份有效配置**，日志里会写明原因，例如：
 
@@ -309,6 +353,11 @@ KIV block #1 charge D=6.4 visible loss L=6.4 scaled D*(1-r)=3.2 residual=0% -> �
 | 掉了 **D×(1-减免%)**（缩放已够到精力条） | **`KiTopUp=0`** —— 否则两条机制都减，`KiDamageReductionPercent=50` 会实际减掉 75% |
 
 关掉补回**不会**失去诊断能力：MOD 仍然采样并继续输出 `KIV` 行。
+
+> **旗标事件源下 `KIV` 不适用**（那里看不到扣精量），看 `KIV-FLAG`：
+> `reference` 是扣精前的基准值、`handed back` 是实际补回的量。若某次格挡
+> 连 `KIREF` / `KIV-FLAG` 都没有，说明扣除落在 `KiTopUpPreEventMs` 窗口之外，
+> 调大它即可（代价见上一节）。
 
 ---
 

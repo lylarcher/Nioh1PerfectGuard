@@ -1,5 +1,5 @@
 =====================================================================
- Nioh 1 Perfect Guard  /  仁王1 精防 MOD      version 0.1.0-nioh1
+ Nioh 1 Perfect Guard  /  仁王1 精防 MOD      version 0.1.1-nioh1
 =====================================================================
 
 *** WHERE TO EXTRACT / 解压到哪里 ***
@@ -76,6 +76,9 @@ Press guard at the moment you are hit -> perfect guard, with rewards:
   martial-skill input) is left to the game; movement never blocks the cancel.
 * Parry sound (replaceable WAV)
 * Optional, off by default: Ki/HP damage to the enemy that was blocked
+* **99 gauge** (amrita / guardian-spirit gauge), on by default: add N% per
+  perfect guard while the 99 state is inactive, and/or extend the burning gauge by N%
+  while it is active (`LivingWeapon*` keys in the INI)
 
 Everything is configured in `Nioh1PerfectGuard.ini` (hot-reloaded, except
 `Enabled`). The mod changes **no game file** - not one byte of code.

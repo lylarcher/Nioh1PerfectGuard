@@ -15,7 +15,7 @@
 
 | 功能 | 本包状态 | 说明 |
 | --- | --- | --- |
-| 精防判定 | 开 | 格挡落在"防御键**按下沿** + `WindowMs`(250ms) 窗口"内 |
+| 精防判定 | 开 | 格挡落在"防御键**按下沿** + `WindowMs`(450ms) 窗口"内 |
 | 格挡耗精减免 | 开 | `KiDamageReductionPercent=100` |
 | 回精 | 开 | `KiRecoveryMode=3`（回复最大精力的 1/6） |
 | 对敌削精 / HP | 关 | `EnemyKiDamage` / `EnemyHpDamage`，带范围闸门，绝不猜目标 |

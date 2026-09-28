@@ -140,6 +140,89 @@ static inline float pg_ki_step(PgKiRestore *s, float now_value,
     return target;
 }
 
+// ------------------------------------------------- the 99 gauge (精华量表) -------
+// Which percentage of the 99 gauge a perfect guard should add, and whether to add
+// at all.
+//
+// The engine's own "add to the 99 gauge" is a state object -- the RTTI name is
+// Character::AddStateObjectAmritaGaugeUp, and its apply is
+//     gauge = min(gauge + [obj+0x50], 1.0)
+// on a gauge that is normalised to 0..1. So a percentage maps straight onto the
+// constructor's magnitude and *no field offset has to be guessed*: the engine adds
+// the amount to whatever object the gauge really lives on and does the clamping.
+//
+// The gauge does two different jobs, which is why the operator has two switches:
+// while the 99 state is inactive the gauge accumulates towards activation, while it
+// is active that same gauge *is* the burning timer, so adding to it extends the
+// state. `in_lw` is 1 when the engine's own flag says the state is active, 0 when it
+// says it is not, and -1 when the flag could not be read.
+//
+// The ordering is deliberate: the extend path only takes over when the operator
+// actually enabled it, so a misread flag can never silently switch the accumulate
+// feature off -- it can only add instead of extend, which is the harmless direction.
+// An unreadable flag (-1) behaves the same way.
+static inline int pg_lw_plan(int gauge_on, int gauge_percent, int extend_on,
+                             int extend_percent, int in_lw) {
+    if (in_lw > 0 && extend_on && extend_percent > 0) {
+        return extend_percent > 100 ? 100 : extend_percent;
+    }
+    if (gauge_on && gauge_percent > 0) {
+        return gauge_percent > 100 ? 100 : gauge_percent;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------- the pre-event reference --
+// Which Ki value a block is measured against.
+//
+// The cost site fires *before* the engine subtracts, so there the live value is
+// the right reference. The flag site fires *after*: the engine has already charged
+// by the time the flag is written. A field log from a real user shows it directly
+// -- `ki=71.03/105` in the very same millisecond as the perfect guard, down from a
+// full 105. Sampling at event time therefore produces a reference that already
+// contains the charge, the measured "loss" is zero, and the top-up does nothing at
+// all while still looking configured. That is exactly what was reported: every
+// other reward worked, and Ki was never refunded.
+//
+// So the reference comes from a short ring of samples kept by the 8ms input tick:
+// the *highest* value seen within `window_ms` before the event, never below the
+// live value.
+//
+// Why the max rather than the newest sample: the tick is 8ms and the charge can
+// land anywhere inside the window, so the newest sample may already be post-charge.
+// The max over a window that is short relative to player input (100ms by default --
+// the charge and the flag land in the same frame) is the value from before the
+// charge, while a spend from an earlier attack, 250ms+ away in practice, stays out.
+//
+// The honest failure mode: a spend that lands *inside* the window but is unrelated
+// to the block (attack into a block within 100ms) is refunded too. That is what the
+// window length is for, and setting it to 0 turns the whole mechanism off.
+typedef struct {
+    unsigned long long ms;   // 0 = slot never written
+    float ki;
+} PgKiSample;
+
+// The reader in the exception handler copies at most this many samples; the writer
+// keeps a ring of the same size (64 * 8ms ~= 512ms), which is what bounds the
+// usable window: a longer KiTopUpPreEventMs than the ring covers cannot be served.
+#define PG_KI_REF_MAX_SAMPLES 64
+
+static inline float pg_ki_ref(const PgKiSample *s, int n, unsigned long long now,
+                             unsigned long long window_ms, float live) {
+    float best = live;
+    if (window_ms == 0) return best;              // 0 = reference disabled
+    int cap = n < PG_KI_REF_MAX_SAMPLES ? n : PG_KI_REF_MAX_SAMPLES;
+    for (int i = 0; i < cap; ++i) {
+        if (s[i].ms == 0) continue;               // unwritten slot
+        if (s[i].ms > now) continue;              // clock went backwards: ignore
+        if (now - s[i].ms > window_ms) continue;  // outside the window
+        // NaN fails the first test, so no separate isnan() is needed.
+        if (!(s[i].ki >= 0.0f) || s[i].ki > 100000.0f) continue;
+        if (s[i].ki > best) best = s[i].ki;
+    }
+    return best;
+}
+
 // ---------------------------------------------------------------------------
 // Restoring the player's HP on a perfect guard.
 //
@@ -693,6 +776,44 @@ static inline unsigned int pg_logic_digest(void) {
                     h = pg_fold_float(h, v);
                     h = pg_fold_float(h, s.given);
                 }
+    }
+
+    // 3b. pre-event reference selection. A sample set shaped like the reported
+    //     session -- full, then already charged by the time the flag is written --
+    //     must resolve to the pre-charge value, and a disabled window must fall
+    //     back to the live value.
+    {
+        const PgKiSample ring[5] = {
+            { 2050, 105.0f },   // newest first, the order the reader copies in
+            { 2042, 71.03f },   // the charge already applied: 71.03 of 105
+            { 2034, 105.0f },
+            { 1990, 105.0f },
+            { 1500, 105.0f },
+        };
+        const unsigned long long windows[4] = {0, 16, 100, 400};
+        const float lives[3] = {71.03f, 105.0f, -1.0f};
+        for (int wi = 0; wi < 4; ++wi)
+            for (int li = 0; li < 3; ++li) {
+                h = pg_fold_float(h, pg_ki_ref(ring, 5, 2050, windows[wi], lives[li]));
+                h = pg_fold_float(h, pg_ki_ref(ring, 0, 2050, windows[wi], lives[li]));
+            }
+        // an unwritten slot, an absurd value and a backwards clock are all ignored
+        const PgKiSample junk[3] = { { 0, 500.0f }, { 2049, 999999.0f }, { 4000, 900.0f } };
+        h = pg_fold_float(h, pg_ki_ref(junk, 3, 2050, 100, 42.0f));
+    }
+
+    // 3c. the 99-gauge plan across both switches and all three flag readings
+    {
+        const int ons[2] = {0, 1};
+        const int pcts[4] = {0, 5, 10, 250};
+        const int flags[3] = {-1, 0, 1};
+        for (int a = 0; a < 2; ++a)
+            for (int b = 0; b < 2; ++b)
+                for (int c = 0; c < 4; ++c)
+                    for (int d = 0; d < 4; ++d)
+                        for (int e = 0; e < 3; ++e)
+                            h = pg_fold_bits(h, (unsigned)pg_lw_plan(
+                                ons[a], pcts[c], ons[b], pcts[d], flags[e]));
     }
 
     // 4. verdict classification over the same grid
