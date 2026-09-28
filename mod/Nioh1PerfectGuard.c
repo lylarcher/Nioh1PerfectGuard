@@ -241,12 +241,14 @@ static void config_defaults(Config *c) {
     c->armor_buff = 0;
 
     c->armor_buff_ms = 5000;
-    // The 99 gauge: on by default (asked for), 10% per perfect guard in each phase.
-    // It calls game code, like the timed buffs, so DiagDisable bit 16 switches it off
-    // together with them, and the flag/counter probes report every call.
-    c->lw_gauge_on = 1;
+    // The 99 gauge: OFF by default again. A gameplay log proved the engine-call route
+    // has no visible effect (add() reports success but the gauge never moves -- see
+    // CHANGELOG 2.0i), so leaving it on would only make every perfect guard call game
+    // code for nothing. The `LWD` diagnostic now measures the real field; once that is
+    // known the feature writes it directly and these come back on by default.
+    c->lw_gauge_on = 0;
     c->lw_gauge_percent = 10;
-    c->lw_extend_on = 1;
+    c->lw_extend_on = 0;
     c->lw_extend_percent = 10;
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
     // and unlike the timed buffs it needs no engine calls -- it only advances the
@@ -1555,8 +1557,12 @@ static int buff_state_present(void *mgr, int state_id, void *want_obj) {
         visited++;
         unsigned char marker = 0;
         void *l = NULL, *r = NULL, *so = NULL;
-        if (!ReadProcessMemory(self, (char *)n + 0x19, &marker, 1, &got)) continue;
-        if (marker) continue;                      // header/leaf node: nothing below
+        // `marker` is read for the record but must NOT prune the walk: on this build it
+        // looks like a colour/flag bit, and treating a set bit as "leaf, nothing below"
+        // made this check report NOT FOUND even for a node add() had just inserted (a
+        // gameplay log shows exactly that). Reads of a bogus pointer fail safely and the
+        // walk is bounded, so exploring both children is cheap.
+        ReadProcessMemory(self, (char *)n + 0x19, &marker, 1, &got);
         ReadProcessMemory(self, (char *)n + 0x00, &l, sizeof(l), &got);
         ReadProcessMemory(self, (char *)n + 0x10, &r, sizeof(r), &got);
         if (!ReadProcessMemory(self, (char *)n + 0x28, &so, sizeof(so), &got)) continue;
@@ -1897,17 +1903,23 @@ static int lw_flag_byte(void) {
     return flag ? 1 : 0;
 }
 
-// Combine the two sources. Called from the input thread (it walks a tree), never from
-// the exception handler.
+// Pick between the two sources. Called from the input thread (it walks a tree), never
+// from the exception handler.
+//
+// Precedence matters, and the first version got it wrong in a way a gameplay log
+// caught: it OR-ed the two, and on the machine that was tested the flag byte read 1
+// *permanently* (the container said 0x22 absent for the whole session). Every guard was
+// therefore classified as "in the 99 state". The container -- the engine's own state
+// list -- is the authoritative judge whenever it can be read at all; the flag byte is
+// only a fallback for when it cannot.
 static int lw_resolve(void) {
     int flag = lw_flag_byte();
     void *mgr = buff_manager();
     int present = mgr ? buff_state_present(mgr, PG_STATE_ID_CALL_SPIRIT, NULL) : -1;
     InterlockedExchange(&g_lw_seen_present, present);
     InterlockedExchange(&g_lw_seen_flag, flag);
-    if (present == 1 || flag == 1) return 1;
-    if (present == 0 || flag == 0) return 0;
-    return -1;
+    if (present >= 0) return present;
+    return flag;
 }
 
 // Cheap enough for the input tick, and it must not run in the VEH: an exception
@@ -1916,6 +1928,53 @@ static void lw_refresh_state(void) {
     static int tick = 0;
     if (++tick % PG_LW_REFRESH_TICKS) return;
     InterlockedExchange(&g_lw_seen_in_state, lw_resolve());
+}
+
+// Read-only measurement of every candidate field, once per second (max 120 lines).
+//
+// Why it exists: a gameplay log proved that adding an AmritaGaugeUp state object has no
+// visible effect (add() reported success, the gauge never moved), so the mod cannot keep
+// guessing about which object carries the 99 gauge. This line prints, side by side:
+//   * the four floats around the visible Ki pair (param+0x40/+0x44/+0x48/+0x4C) -- the
+//     pair the engine's own one-shot "refill" path touches;
+//   * the +0x15C float of both candidates (char+0x15C and param+0x15C) -- the offset the
+//     AmritaGaugeUp apply writes to;
+//   * the flag byte, whether the container holds CallSpirit (0x22), and whether the
+//     container holds *our* AmritaGaugeUp node (0x20).
+// Watching that line while the 99 gauge fills and drains identifies the real field in one
+// session, and then the feature can write it directly instead of calling game code.
+static void lw_diag(void) {
+    static unsigned long long last = 0;
+    static int lines = 0;
+    if (lines >= 120) return;
+    unsigned long long now = now_ms();
+    if (now - last < 1000) return;
+    last = now;
+    if (!g_base) return;
+    void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+    if (!player) return;
+    void *param = *(void **)((char *)player + 0x240);
+    if (!param) return;
+
+    HANDLE self = GetCurrentProcess();
+    SIZE_T got = 0;
+    float p40 = -1, p44 = -1, p48 = -1, p4c = -1, p15c = -1, c15c = -1;
+    ReadProcessMemory(self, (char *)param + 0x40, &p40, 4, &got);
+    ReadProcessMemory(self, (char *)param + 0x44, &p44, 4, &got);
+    ReadProcessMemory(self, (char *)param + 0x48, &p48, 4, &got);
+    ReadProcessMemory(self, (char *)param + 0x4C, &p4c, 4, &got);
+    ReadProcessMemory(self, (char *)param + 0x15C, &p15c, 4, &got);
+    ReadProcessMemory(self, (char *)player + 0x15C, &c15c, 4, &got);
+
+    void *mgr = buff_manager();
+    int c22 = mgr ? buff_state_present(mgr, PG_STATE_ID_CALL_SPIRIT, NULL) : -1;
+    int n20 = mgr ? buff_state_present(mgr, PG_STATE_ID_AMRITA_UP, NULL) : -1;
+
+    log_line("LWD param40=%.5g param44=%.5g param48=%.5g param4c=%.5g p15c=%.5g "
+             "c15c=%.5g flag=%ld c22=%d n20=%d",
+             p40, p44, p48, p4c, p15c, c15c,
+             (long)InterlockedCompareExchange(&g_lw_seen_flag, 0, 0), c22, n20);
+    lines++;
 }
 
 // Called from the VEH: reads the cached judgement only -- no memory walking, no
@@ -3214,6 +3273,7 @@ static DWORD WINAPI input_thread(LPVOID param) {
         buff_watchdog_config();
         buff_tick();
         lw_refresh_state();
+        lw_diag();
         lw_gauge_tick();
         poll_hotkey();
         Sleep(8);

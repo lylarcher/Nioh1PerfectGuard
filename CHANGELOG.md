@@ -257,6 +257,40 @@ RTTI 里有 `Character::AddStateObjectAmritaGaugeUp` / `AmritaGaugeRecover` /
 窗口调宽到 450ms 的副作用也是显而易见的：**更容易判定成精防**（按下防御键后 450ms 内挨打
 都算），奖励因此更频繁。想恢复原来的手感就把 `WindowMs` 改回 250。
 
+### 2.0i 九十九槽：引擎状态对象这条路线**实测无效**（0.1.1 实机日志结论），改为先测量
+
+另一台机器上 0.1.1 的实机日志（40+ 次精防）给出了明确结论：
+
+```
+LW engine: the 99-gauge constructor at 0x7FF655BFE870 stamps state id 0x20 in its first 128 bytes
+LW gauge: +30% via AmritaGaugeUp state 0x1CD4C87DC70 (in 99 state=1 [container 0x22=0, flag=1], add()=1, container check: NOT FOUND)
+```
+
+- **构造函数校验通过**（地址尾数 `E870`，正是修正后的起点），`add()` 也返回成功；
+- 但**精华量表在游戏里没有任何变化**（用户实测）；
+- `container check: NOT FOUND` 是**回读遍历的 bug**（见下），不是插入失败的证据；
+- `container 0x22=0` 而 `flag=1`：那个"激活标志字节"在这台机器上**恒为 1**，于是
+  第一次实现的"两路相或"把**每一次精防都判成"在九十九状态"**。
+
+**为什么无效**：往状态容器里塞一个对象是引擎的**被动修正器**模式 —— 那个对象是在
+结算时被**读取**的（减伤就是 `伤害 × [obj+0x50]`）。而 `AmritaGaugeUp` 是**一次性效果**：
+它的 apply（`0x7A8120`，`[target+0x15C] += [obj+0x50]`）需要**有人主动调用**。
+全镜像里 **没有任何直接调用**它的地方（只有 `add()` 内部"同 id 替换"那条路会虚调用），
+所以外部插入的节点不会产生任何效果。
+
+**本轮改动**（都是被日志逼出来的）：
+
+1. 两项开关**先改回默认关**：既然无效，默认开着只会让每次精防白调一次游戏代码；
+2. 判据**改为容器优先**：容器（引擎自己的状态表）读得到时它就是权威，激活标志字节只在
+   容器读不到时兜底 —— 修复"恒为 1 的标志把每次精防都判成在状态中"；
+3. 回读遍历**不再因 `+0x19` 剪枝**：那个字节像颜色/标志位，把它当"叶子节点"会让
+   刚插入的节点也报 NOT FOUND；
+4. 新增**只读**诊断行 `LWD`（每秒一次，最多 120 行）：同时打印
+   `param+0x40/+0x44/+0x48/+0x4C`、`char+0x15C`、`param+0x15C`、激活标志、容器里
+   是否有 `CallSpirit(0x22)` 与我们的节点 `0x20`。
+
+**下一步**：打一局（让九十九量表涨一次、再烧一次），`LWD` 行就能定出量表到底是哪个
+字段；下一版改为**直接写那个字段**（不调游戏代码、不需要容器），再把两项默认打开。
 ### 2.1 你在包内就能自己核对的
 
 | 做法 | 看什么 |
@@ -281,7 +315,7 @@ RTTI 里有 `Character::AddStateObjectAmritaGaugeUp` / `AmritaGaugeRecover` /
 | 锚点期望字节与解密镜像逐字节一致 | `python tools\test_anchors.py ..` | **4/4 一致**；输入槽推导得 `0x1B78658`，与独立已知值相符 |
 | 精防窗口 / 按键边沿 / 掩码 / 精力补回 / 精防回血 / 限时增益计时 / 日志限流 | `tools\test_logic.exe`（源码 `tools\test_logic.c`） | **227 条断言全过** |
 | INI 编码与取值边界 + **内置默认值必须等于随包 INI** | `python tools\test_ini_encodings.py ..\mod` | **6/6** |
-| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **52/52 标记；117 条日志 0 条未解释** |
+| 文档与代码一致（标记 / 配置键 / 每条日志都被解释） | `python tools\test_doc_markers.py ..` | **53/53 标记；118 条日志 0 条未解释** |
 | 交付文档只引用真实存在的文件 | `python tools\test_doc_paths.py ..` | 通过 |
 | 导出表 | `python tools\list_exports.py ..\mod\Nioh1PerfectGuard.dll` | 12 个 `PG_*` |
 | **测试过的算术 == 发货的算术** | `python tools\test_logic_digest.py ..` | 两个构建的数值指纹一致 |
