@@ -142,6 +142,7 @@ typedef struct {
     // different things in the two phases.
     int lw_gauge_on;
     int lw_gauge_percent;
+    int lw_gauge_max;              // full value of the 99 gauge (measured ~636)
     int lw_extend_on;
     int lw_extend_percent;
     // Guard cancels the player's attack action -- but only a *pure* guard press.
@@ -247,6 +248,10 @@ static void config_defaults(Config *c) {
     // in the engine. See CHANGELOG 2.0j for the measurement that identified the field.
     c->lw_gauge_on = 1;
     c->lw_gauge_percent = 10;
+    // Measured: one small spirit stone adds 212 and three fill the bar, so the full
+    // value is ~636 -- NOT the Ki maximum at param+0x44, which is what an earlier
+    // version clamped to (that is why every write was a no-op).
+    c->lw_gauge_max = 636;
     c->lw_extend_on = 1;
     c->lw_extend_percent = 10;
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
@@ -444,6 +449,7 @@ static int config_load_inner(int first_time) {
     c.lw_gauge_on = ini_int("LivingWeaponGaugeOnGuard", c.lw_gauge_on, 0, 1, &ok);
     c.lw_gauge_percent = ini_int("LivingWeaponGaugePercent", c.lw_gauge_percent,
                                  0, 100, &ok);
+    c.lw_gauge_max = ini_int("LivingWeaponGaugeMax", c.lw_gauge_max, 1, 100000, &ok);
     c.lw_extend_on = ini_int("LivingWeaponExtendOnGuard", c.lw_extend_on, 0, 1, &ok);
     c.lw_extend_percent = ini_int("LivingWeaponExtendPercent", c.lw_extend_percent,
                                   0, 100, &ok);
@@ -2097,7 +2103,8 @@ static void lw_scan(void) {
 // must look like a maximum, the current value must be inside [0, max], and the write only
 // ever *raises* the value, never above the maximum.
 #define PG_LW_GAUGE_OFF 0x48
-#define PG_LW_MAX_OFF 0x44
+#define PG_LW_BURN_OFF 0xCC
+#define PG_LW_BURN_MAX 100.0f
 #define PG_LW_CUR_MAX 100000.0f
 
 static void lw_plan_on_guard(void) {
@@ -2110,9 +2117,34 @@ static void lw_plan_on_guard(void) {
     void *param = *(void **)((char *)player + 0x240);
     if (!param) return;
 
+    // Two different bars, measured on a real session:
+    //   [param+0xCC] is the burning bar: 0 -> 100 the moment the 99 state starts and
+    //                then draining to 0 over ~33s. "Extend the burn" = add percentage
+    //                points to it (clamped at 100).
+    //   [param+0x48] is the essence gauge: one small spirit stone adds ~212 and three
+    //                fill it, so its maximum is ~636 -- NOT [param+0x44] (that is the Ki
+    //                maximum, 212, and clamping to it is why the earlier version never
+    //                changed anything). "Accumulate" = add pct% of the configured 636.
+    float burn = *(float *)((char *)param + PG_LW_BURN_OFF);
+    if (burn > 0.0f) {
+        float nv = burn + (float)pct;
+        if (nv > PG_LW_BURN_MAX) nv = PG_LW_BURN_MAX;
+        if (nv > burn) {
+            *(float *)((char *)param + PG_LW_BURN_OFF) = nv;
+            InterlockedExchange(&g_lw_wrote, 1);
+            g_lw_wrote_val = nv; g_lw_wrote_max = PG_LW_BURN_MAX; g_lw_back = 0;
+        }
+        if (g_lw_log < 30) {
+            log_line("LW burn: +%ld%% %g -> %g (max %g, in 99 state=1)", pct, burn, nv,
+                     PG_LW_BURN_MAX);
+            g_lw_log++;
+        }
+        return;
+    }
+
     float *cur = (float *)((char *)param + PG_LW_GAUGE_OFF);
-    float *max = (float *)((char *)param + PG_LW_MAX_OFF);
-    float c = *cur, m = *max;
+    float c = *cur;
+    float m = (float)g_cfg.lw_gauge_max;
     if (!(m > 0.0f) || m > PG_LW_CUR_MAX) return;      // NaN-safe
     if (!(c >= 0.0f) || c > m) return;                 // not a gauge-shaped value
 
