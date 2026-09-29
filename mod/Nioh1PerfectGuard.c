@@ -455,7 +455,7 @@ static int config_load_inner(int first_time) {
     c.lw_gauge_on = ini_int("LivingWeaponGaugeOnGuard", c.lw_gauge_on, 0, 1, &ok);
     c.lw_gauge_percent = ini_int("LivingWeaponGaugePercent", c.lw_gauge_percent,
                                  0, 100, &ok);
-    c.lw_gauge_max = ini_int("LivingWeaponGaugeMax", c.lw_gauge_max, 1, 100000, &ok);
+    c.lw_gauge_max = ini_int("LivingWeaponGaugeMax", c.lw_gauge_max, 0, 100000, &ok);
     c.lw_gauge_offset = ini_int("LivingWeaponGaugeOffset", c.lw_gauge_offset, 0, 0x4000, &ok);
     c.lw_extend_on = ini_int("LivingWeaponExtendOnGuard", c.lw_extend_on, 0, 1, &ok);
     c.lw_extend_percent = ini_int("LivingWeaponExtendPercent", c.lw_extend_percent,
