@@ -171,6 +171,62 @@ EN = {
 }
 
 
+# 英文长说明：按"键名"索引（比逐字匹配中文原文安全得多），查不到就回落到中文说明。
+EN_HINT = {
+    "Enabled": "0 = install no breakpoints at all (bypass). Changing this one needs a game restart; every other key hot-reloads within ~1s.",
+    "WindowMs": "How long after a fresh press a block still counts as a perfect guard. Bigger = more forgiving.",
+    "CancelRecovery": "Skip the remaining recovery frames after a perfect guard.",
+    "CancelRecoveryFrames": "Frames skipped for the option above (30 is about half a second).",
+    "RequireTimelyGuard": "1 = the block must happen within WindowMs of a FRESH press; 0 = every block counts (testing).",
+    "GuardButtonMask": "Guard button as standard XInput bits: 0x0100 = L1/LB, 0x0200 = R1/RB, 0x1000/0x2000/0x4000/0x8000 = A/B/X/Y.",
+    "ParryButtonMask": "0 = the guard button decides. 0x8000 = Y (Rise of the Ronin style parry), 0x2000 = B (Wo Long style). Opens the timing window only: it never cancels an action, so a martial skill and a parry can share the key. Uses no input injection, so B keeps picking items up normally.",
+    "PadSlot": "Which controller slot to read (0-3). Keep 0 for a single controller.",
+    "GuardKeyVK": "Virtual-key code for a keyboard/mouse guard button (0 = unused). e.g. 0x02 = right mouse, 0x10 = Shift.",
+    "LearnButtons": "Logs every button you press, so you can find the right mask.",
+    "KiTrace": "Extra logging around the guard Ki cost (verbose).",
+    "DiagDisable": "Bit mask that silences diagnostics one by one. 16 = the engine-call ones. Leave 0 if unsure.",
+    "BlockEventSource": "2 = automatic (recommended). Other values help diagnose a machine where perfect guards are not detected.",
+    "KiDamageReductionPercent": "100 = blocking costs no Ki at all.",
+    "KiTopUp": "Refund the Ki a perfect guard consumed.",
+    "KiTopUpPreEventMs": "How far back to sample Ki for that refund (default 100ms).",
+    "KiRecoveryMode": "0 = off; 3 = the recommended combined mode.",
+    "FixedRecovery": "Ki restored per trigger in fixed mode.",
+    "HpRecoveryMode": "0 = off; 1 = percent; 2 = fixed; 3 = whichever is larger.",
+    "HpRestorePercent": "HP restored as a percentage of maximum.",
+    "HpRestoreFixed": "HP restored as a flat amount.",
+    "DamageCutPercent": "Verified in game. Damage taken is multiplied by (1 - this/100) during the window. It multiplies with your gear reduction (10% gear + 50% here is about 55% total).",
+    "DamageCutMs": "Length of the damage-reduction window (default 10000 = 10s).",
+    "ArmorBuff": "Off by default: setting the bit did not change hit-stun in testing. The implementation is harmless and stays available.",
+    "ArmorBuffMs": "Length of the armour window.",
+    "SpeedBuffPercent": "Not implemented yet; keep 0.",
+    "SpeedBuffMs": "Not implemented yet; keep 10000.",
+    "LivingWeaponGaugeOnGuard": "Verified. While NOT in the 99 state, a perfect guard adds to the amrita/99 gauge.",
+    "LivingWeaponGaugePercent": "How much of the gauge one perfect guard adds (default 10).",
+    "LivingWeaponExtendOnGuard": "Verified. While the 99 state is active (burn bar > 0), a perfect guard extends the burn.",
+    "LivingWeaponExtendPercent": "Added in points (the bar is 100). Full burn lasts 7-30s depending on gear, so 35 points is about +35% duration.",
+    "LivingWeaponGaugeOffset": "[Advanced] Byte offset of the gauge int counter (default 0xC0; the maximum is read from offset+8). Do not change unless you know why.",
+    "LivingWeaponGaugeMax": "[Advanced] 0 = read the maximum from the field at runtime (recommended); a positive value forces it.",
+    "CancelActionOnGuard": "Pressing guard cancels the current attack immediately.",
+    "AttackButtonMask": "Used to tell whether an attack was in progress when guard was pressed. 0xF000 covers the usual attack buttons.",
+    "ComboGuardWindowMs": "How long into a combo a cancel is still allowed.",
+    "CancelActionStrictHold": "1 = guard must be held, so a brush against the button cannot cancel.",
+    "CancelActionFrames": "Action frames advanced when cancelling.",
+    "CancelActionRecentMs": "0 = no limit; otherwise only attacks started within this many ms are cancelled.",
+    "EnemyKiDamage": "Extra Ki damage dealt to the enemy after a perfect guard.",
+    "EnemyHpDamage": "Extra HP damage dealt to the enemy after a perfect guard.",
+    "SoundEnabled": "Play a sound when a perfect guard lands.",
+    "SoundVolume": "0.0 to 1.0.",
+    "SoundFile": "wav file name, looked up next to the INI.",
+    "DiagnosticHotkey": "Press the hotkey to write a diagnostic summary into the log.",
+}
+
+
+def H(key, hint):
+    """English long note for a key, falling back to the Chinese one."""
+    if LANG["cur"] == "en":
+        return EN_HINT.get(key, hint)
+    return hint
+
 def L(s):
     """Translate one UI string (falling back to the original)."""
     if LANG["cur"] == "en":
@@ -389,7 +445,7 @@ class App:
                             ("0x%X" % hi if kind == "hex" else hi)),
                             foreground="#888").pack(side="left", padx=8)
                 ttk.Label(row, text=key, foreground="#999").pack(side="left", padx=8)
-                ttk.Label(row, text=hint, foreground="#666", wraplength=520,
+                ttk.Label(row, text=H(key, hint), foreground="#666", wraplength=560,
                           justify="left").pack(side="left", padx=6)
 
         if deferred:
@@ -403,14 +459,14 @@ class App:
                 self.vars[key] = (var, kind, lo, hi, label)
                 ttk.Entry(row, textvariable=var, width=12).pack(side="left")
                 ttk.Label(row, text=key, foreground="#999").pack(side="left", padx=8)
-                ttk.Label(row, text=hint, foreground="#666", wraplength=520,
+                ttk.Label(row, text=H(key, hint), foreground="#666", wraplength=560,
                           justify="left").pack(side="left", padx=6)
 
     # ---------- 动作 ----------
     def toggle_lang(self):
         LANG["cur"] = "en" if LANG["cur"] == "zh" else "zh"
         self.build()
-        self.status.config(text="Language: %s (EN covers the UI, section titles and key labels; long notes stay Chinese)" % LANG["cur"] if LANG["cur"] == "en" else "语言：中文")
+        self.status.config(text="Language: English (full)" if LANG["cur"] == "en" else "语言：中文")
 
     def apply_preset(self, kv):
         hit = 0
