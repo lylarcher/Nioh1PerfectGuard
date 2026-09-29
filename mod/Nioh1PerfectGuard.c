@@ -142,6 +142,8 @@ typedef struct {
     // different things in the two phases.
     int lw_gauge_on;
     int lw_gauge_percent;
+    int lw_gauge_max;              // full value of the 99 gauge (measured ~636)
+    int lw_gauge_offset;           // byte offset of the real gauge store, 0 = not identified yet
     int lw_extend_on;
     int lw_extend_percent;
     // Guard cancels the player's attack action -- but only a *pure* guard press.
@@ -241,12 +243,25 @@ static void config_defaults(Config *c) {
     c->armor_buff = 0;
 
     c->armor_buff_ms = 5000;
-    // The 99 gauge: on by default (asked for), 10% per perfect guard in each phase.
-    // It calls game code, like the timed buffs, so DiagDisable bit 16 switches it off
-    // together with them, and the flag/counter probes report every call.
+    // The 99 gauge: ON by default, 10% per perfect guard in each phase. This is now a
+    // direct write to the measured field ([param+0x48], maximum shared with Ki at
+    // [param+0x44]) -- no game code is called at all, so there is nothing left to verify
+    // in the engine. See CHANGELOG 2.0j for the measurement that identified the field.
     c->lw_gauge_on = 1;
     c->lw_gauge_percent = 10;
-    c->lw_extend_on = 1;
+    // Measured: one small spirit stone adds 212 and three fill the bar, so the full
+    // value is ~636 -- NOT the Ki maximum at param+0x44, which is what an earlier
+    // version clamped to (that is why every write was a no-op).
+    c->lw_gauge_max = 0;          // 0 = take the maximum from the field next to it
+    // [param+0x48] turned out to be a value the engine rewrites every frame (LWD2 proved
+    // it: wrote 260.6, read back 197), so the mod must not write it. Until the real
+    // store is identified this is 0 = disabled; the offset can then be set from the INI
+    // without a new build.
+    c->lw_gauge_offset = 0xC0;    // int counter inside the amrita/99 cluster
+    // The burn write works (LWD2 proved it: wrote 78.42, read back 78.19), but the bar
+    // drains at ~15/s in game, so +10 points is ~0.7s -- imperceptible. Parked for
+    // v0.1.2 with a sensible magnitude; off by default in v0.1.1 by decision.
+    c->lw_extend_on = 0;
     c->lw_extend_percent = 10;
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
     // and unlike the timed buffs it needs no engine calls -- it only advances the
@@ -443,6 +458,8 @@ static int config_load_inner(int first_time) {
     c.lw_gauge_on = ini_int("LivingWeaponGaugeOnGuard", c.lw_gauge_on, 0, 1, &ok);
     c.lw_gauge_percent = ini_int("LivingWeaponGaugePercent", c.lw_gauge_percent,
                                  0, 100, &ok);
+    c.lw_gauge_max = ini_int("LivingWeaponGaugeMax", c.lw_gauge_max, 0, 100000, &ok);
+    c.lw_gauge_offset = ini_int("LivingWeaponGaugeOffset", c.lw_gauge_offset, 0, 0x4000, &ok);
     c.lw_extend_on = ini_int("LivingWeaponExtendOnGuard", c.lw_extend_on, 0, 1, &ok);
     c.lw_extend_percent = ini_int("LivingWeaponExtendPercent", c.lw_extend_percent,
                                   0, 100, &ok);
@@ -1555,8 +1572,12 @@ static int buff_state_present(void *mgr, int state_id, void *want_obj) {
         visited++;
         unsigned char marker = 0;
         void *l = NULL, *r = NULL, *so = NULL;
-        if (!ReadProcessMemory(self, (char *)n + 0x19, &marker, 1, &got)) continue;
-        if (marker) continue;                      // header/leaf node: nothing below
+        // `marker` is read for the record but must NOT prune the walk: on this build it
+        // looks like a colour/flag bit, and treating a set bit as "leaf, nothing below"
+        // made this check report NOT FOUND even for a node add() had just inserted (a
+        // gameplay log shows exactly that). Reads of a bogus pointer fail safely and the
+        // walk is bounded, so exploring both children is cheap.
+        ReadProcessMemory(self, (char *)n + 0x19, &marker, 1, &got);
         ReadProcessMemory(self, (char *)n + 0x00, &l, sizeof(l), &got);
         ReadProcessMemory(self, (char *)n + 0x10, &r, sizeof(r), &got);
         if (!ReadProcessMemory(self, (char *)n + 0x28, &so, sizeof(so), &got)) continue;
@@ -1871,14 +1892,27 @@ static void buff_watchdog_config(void) {
 #define PG_LW_STATE_DURATION_S 0.05f           // seconds; the engine expires the node
 #define PG_RVA_LW_FLAG_HOLDER 0x18715E0
 #define PG_LW_FLAG_OFFSET 0x104
+// The amrita/99 cluster is a sub-object at param+0xB0; its gauge is an INT counter pair
+// (the engine's own "recover the amrita gauge" primitive 0x7AF370 does sub+0x10 += n,
+// clamped by sub+0x18). A float-based scan cannot see an int, which is why this took so
+// many rounds to find.
+#define PG_LW_INT_OFF 0xC0
+#define PG_LW_INT_MAX_OFF 0xC8
 #define PG_LW_REFRESH_TICKS 8                  // ~64ms on the 8ms input tick
 
-static volatile LONG g_lw_pending_pct = 0;     // parked by the handler, taken by the thread
 static volatile LONG g_lw_seen_in_state = -1;  // -1 unknown, 0/1 resolved by the thread
 static volatile LONG g_lw_seen_present = -1;   // container judge: 1/0, -1 unreadable (log only)
 static volatile LONG g_lw_seen_flag = -1;      // flag byte: 1/0, -1 unreadable (log only)
 static LONG g_lw_log = 0;
-static int g_lw_engine_ok = -1;
+// Set by the write below, checked by the input thread ~64ms later: if the engine has
+// already put its own value back, the field is a mirror and writing it can never work.
+static volatile LONG g_lw_wrote = 0;
+static float g_lw_wrote_val = -1.0f;
+static float g_lw_wrote_max = -1.0f;
+static volatile LONG g_lw_back = 0;
+static volatile LONG g_lw_verify_off = 0;   // offset the write went to
+static volatile LONG g_lw_verify_int = 0;   // 1 = int counter, 0 = float
+static float g_lw_back_val = -1.0f;
 
 // 1 = the engine's flag byte says the 99 state is active, 0 = it says it is not,
 // -1 = cannot tell. ReadProcessMemory on our own process, so a wrong or not-yet
@@ -1897,17 +1931,35 @@ static int lw_flag_byte(void) {
     return flag ? 1 : 0;
 }
 
-// Combine the two sources. Called from the input thread (it walks a tree), never from
-// the exception handler.
+// Pick between the two sources. Called from the input thread (it walks a tree), never
+// from the exception handler.
+//
+// Precedence matters, and the first version got it wrong in a way a gameplay log
+// caught: it OR-ed the two, and on the machine that was tested the flag byte read 1
+// *permanently* (the container said 0x22 absent for the whole session). Every guard was
+// therefore classified as "in the 99 state". The container -- the engine's own state
+// list -- is the authoritative judge whenever it can be read at all; the flag byte is
+// only a fallback for when it cannot.
 static int lw_resolve(void) {
     int flag = lw_flag_byte();
     void *mgr = buff_manager();
     int present = mgr ? buff_state_present(mgr, PG_STATE_ID_CALL_SPIRIT, NULL) : -1;
+    // The field that was 1 for the whole burning window in the second gameplay log: while
+    // the 99 state is up the gauge drained monotonically (178.5 -> 110.03 in seven
+    // seconds) and [param+0x4C] was 1 for exactly that window, then went back to 0. It is
+    // the most direct evidence available -- the container id 0x22 never appeared at all
+    // in that session, and the inferred global flag byte reads 1 permanently.
+    int burning = 0;
+    if (g_base) {
+        void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+        void *param = player ? *(void **)((char *)player + 0x240) : NULL;
+        if (param) burning = *(int *)((char *)param + 0x4C) != 0;
+    }
     InterlockedExchange(&g_lw_seen_present, present);
     InterlockedExchange(&g_lw_seen_flag, flag);
-    if (present == 1 || flag == 1) return 1;
-    if (present == 0 || flag == 0) return 0;
-    return -1;
+    if (burning) return 1;              // burning the gauge: unambiguously in the 99 state
+    if (present >= 0) return present;
+    return flag;
 }
 
 // Cheap enough for the input tick, and it must not run in the VEH: an exception
@@ -1916,72 +1968,252 @@ static void lw_refresh_state(void) {
     static int tick = 0;
     if (++tick % PG_LW_REFRESH_TICKS) return;
     InterlockedExchange(&g_lw_seen_in_state, lw_resolve());
+    // Did our write survive? Only the input thread checks, and only once per write.
+    if (InterlockedCompareExchange(&g_lw_wrote, 0, 0) && !g_lw_back) {
+        if (g_base) {
+            void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+            void *pa = pl ? *(void **)((char *)pl + 0x240) : NULL;
+            if (pa) {
+                int voff = (int)InterlockedCompareExchange(&g_lw_verify_off, 0, 0);
+                if (voff > 0 && InterlockedCompareExchange(&g_lw_verify_int, 0, 0)) {
+                    int iv = 0;
+                    ReadProcessMemory(GetCurrentProcess(), (char *)pa + voff, &iv, 4, NULL);
+                    g_lw_back_val = (float)iv;
+                } else if (voff > 0) {
+                    g_lw_back_val = *(float *)((char *)pa + voff);
+                }
+                InterlockedExchange(&g_lw_back, 1);
+            }
+        }
+    }
 }
 
-// Called from the VEH: reads the cached judgement only -- no memory walking, no
-// engine calls, no arithmetic beyond the plan itself.
+// Read-only measurement of every candidate field, once per second (max 120 lines).
+//
+// Why it exists: a gameplay log proved that adding an AmritaGaugeUp state object has no
+// visible effect (add() reported success, the gauge never moved), so the mod cannot keep
+// guessing about which object carries the 99 gauge. This line prints, side by side:
+//   * the four floats around the visible Ki pair (param+0x40/+0x44/+0x48/+0x4C) -- the
+//     pair the engine's own one-shot "refill" path touches;
+//   * the +0x15C float of both candidates (char+0x15C and param+0x15C) -- the offset the
+//     AmritaGaugeUp apply writes to;
+//   * the flag byte, whether the container holds CallSpirit (0x22), and whether the
+//     container holds *our* AmritaGaugeUp node (0x20).
+// Watching that line while the 99 gauge fills and drains identifies the real field in one
+// session, and then the feature can write it directly instead of calling game code.
+static void lw_diag(void) {
+    static unsigned long long last = 0;
+    static int lines = 0;
+    if (lines >= 1200) return;
+    unsigned long long now = now_ms();
+    if (now - last < 1000) return;
+    last = now;
+    if (!g_base) return;
+    void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+    if (!player) return;
+    void *param = *(void **)((char *)player + 0x240);
+    if (!param) return;
+
+    HANDLE self = GetCurrentProcess();
+    SIZE_T got = 0;
+    float p40 = -1, p44 = -1, p48 = -1, p4c = -1, p15c = -1, c15c = -1;
+    ReadProcessMemory(self, (char *)param + 0x40, &p40, 4, &got);
+    ReadProcessMemory(self, (char *)param + 0x44, &p44, 4, &got);
+    ReadProcessMemory(self, (char *)param + 0x48, &p48, 4, &got);
+    ReadProcessMemory(self, (char *)param + 0x4C, &p4c, 4, &got);
+    ReadProcessMemory(self, (char *)param + 0x15C, &p15c, 4, &got);
+    ReadProcessMemory(self, (char *)player + 0x15C, &c15c, 4, &got);
+
+    void *mgr = buff_manager();
+    int c22 = mgr ? buff_state_present(mgr, PG_STATE_ID_CALL_SPIRIT, NULL) : -1;
+    int n20 = mgr ? buff_state_present(mgr, PG_STATE_ID_AMRITA_UP, NULL) : -1;
+
+    float rec[16];
+    for (int i = 0; i < 16; ++i)
+        ReadProcessMemory(self, (char *)param + 0xBB0 + i * 0x50 + 0x0C, &rec[i], 4, &got);
+    int iC0 = 0, iC8 = 0;
+    ReadProcessMemory(self, (char *)param + PG_LW_INT_OFF, &iC0, 4, &got);
+    ReadProcessMemory(self, (char *)param + PG_LW_INT_MAX_OFF, &iC8, 4, &got);
+    float p100 = -1.0f;
+    ReadProcessMemory(self, (char *)param + 0x100, &p100, 4, &got);
+    log_line("LWD iC0=%d iC8=%d p100=%.5g param40=%.5g param44=%.5g param48=%.5g param4c=%.5g p15c=%.5g "
+             "c15c=%.5g flag=%ld c22=%d n20=%d",
+             p40, p44, p48, p4c, p15c, c15c,
+             (long)InterlockedCompareExchange(&g_lw_seen_flag, 0, 0), c22, n20);
+    log_line("LWD2 wrote=%.5g/%.5g back=%.5g | rec0..7 %.4g %.4g %.4g %.4g %.4g %.4g %.4g %.4g "
+             "| rec8..15 %.4g %.4g %.4g %.4g %.4g %.4g %.4g %.4g",
+             g_lw_wrote_val, g_lw_wrote_max, g_lw_back_val,
+             rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], rec[6], rec[7],
+             rec[8], rec[9], rec[10], rec[11], rec[12], rec[13], rec[14], rec[15]);
+    lines++;
+}
+// ---------------------------------------------------------------- change scanner --
+// The one measurement that cannot be fooled by a wrong guess.
+//
+// Four rounds guessed which field is the 99 gauge: the engine-call route did nothing,
+// [param+0x48] read "full" while the visible gauge was one third full, and the record
+// table was all zeros. What the operator *does* know is an action that moves the gauge:
+// eating one small spirit stone. So instead of guessing, snapshot two float windows once
+// a second and print only the offsets whose value actually moved by a meaningful amount.
+// One stone then prints the gauge's offset and the size of the step directly; burning it
+// (99 state) prints the drain; and nothing else has to be assumed.
+//
+// Windows: the param object ([[char+0x240]]) 0x00..0x1400 -- it holds the Ki pair at
+// +0x40, the resource table at +0xBB0 and the state container at +0x10B0 -- and the
+// character object's low 0x600 bytes. Per-offset throttle (5s) keeps a continuously
+// draining field from eating the whole log.
+#define PG_LW_SCAN_ZERO 0x00
+#define PG_LW_SCAN_PAR_LEN 0x1400
+#define PG_LW_SCAN_CHR_LEN 0x600
+#define PG_LW_SCAN_MAX (PG_LW_SCAN_PAR_LEN / 4)
+#define PG_LW_SCAN_MIN_DELTA 20.0f
+
+static float g_lw_scan_prev[4][PG_LW_SCAN_MAX];
+static unsigned long long g_lw_scan_last[4][PG_LW_SCAN_MAX];
+static int g_lw_scan_valid[4];
+static LONG g_lw_scan_log = 0;
+
+static void lw_scan_window(int w, void *base, int len, const char *tag, float min_delta) {
+    if (!base || len / 4 > PG_LW_SCAN_MAX) return;
+    float cur[PG_LW_SCAN_MAX];
+    SIZE_T got = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), (char *)base + PG_LW_SCAN_ZERO, cur,
+                           (SIZE_T)len, &got) || got != (SIZE_T)len)
+        return;
+    if (!g_lw_scan_valid[w]) {
+        memcpy(g_lw_scan_prev[w], cur, (size_t)len);
+        g_lw_scan_valid[w] = 1;
+        return;
+    }
+    unsigned long long now = now_ms();
+    for (int i = 0; i < len / 4; ++i) {
+        float a = g_lw_scan_prev[w][i], b = cur[i];
+        if (!(a == a) || !(b == b)) continue;                  // NaN
+        // Transform/position floats live in the tens of thousands and would drown the
+        // log; a gauge is small (0..1 normalised, or 0..max a few hundred).
+        if (a > 20000.0f || a < -20000.0f || b > 20000.0f || b < -20000.0f) continue;
+        float d = b - a;
+        if (d < 0) d = -d;
+        if (d < min_delta) continue;
+        if (now - g_lw_scan_last[w][i] < 2000) continue;        // per-offset throttle
+        g_lw_scan_last[w][i] = now;
+        if (g_lw_scan_log < 300) {
+            log_line("LWC %s+0x%X %g -> %g", tag, PG_LW_SCAN_ZERO + i * 4, a, b);
+            g_lw_scan_log++;
+        }
+    }
+    memcpy(g_lw_scan_prev[w], cur, (size_t)len);
+}
+
+static void lw_scan(void) {
+    static unsigned long long last = 0;
+    if (g_lw_scan_log >= 300 || !g_base) return;
+    unsigned long long now = now_ms();
+    
+    last = now;
+    void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+    if (!player) return;
+    void *param = *(void **)((char *)player + 0x240);
+    lw_scan_window(0, param, PG_LW_SCAN_PAR_LEN, "param", PG_LW_SCAN_MIN_DELTA);
+    lw_scan_window(1, player, 0x1000, "char", PG_LW_SCAN_MIN_DELTA);
+    // The state manager ([[char+0x240]]+0x10B0) area, low threshold: a normalised gauge
+    // would live in something like this and is invisible to the >=20 jump test.
+    if (param) lw_scan_window(2, (char *)param + 0x10B0, 0x200, "smgr", 0.02f);
+    // The amrita/99 cluster the static pass found: a sub-object embedded at param+0xB0.
+    // param+0xCC = sub+0x1C is the burning bar measured in game; sub+0x10/sub+0x18 are
+    // the only add-with-clamp pair (primitive 0x7AF370) = the gauge and its maximum, so
+    // the step per spirit stone is probably small and needs a low threshold.
+    if (param) lw_scan_window(3, (char *)param + 0xB0, 0x80, "lw", 0.01f);
+}
+// Called from the VEH: reads the cached judgement, then writes the gauge field.
+//
+// The engine-call route is dead (see the block comment above), so this is a plain field
+// write. Which field was *measured*, not guessed -- a gameplay log with the LWD probe
+// printed, once a second for two minutes:
+//
+//     param40=197    param44=197 param48=0      Ki full, gauge empty (start of session)
+//     param40=197    param44=197 param48=197    the gauge jumped to full in under a second
+//     param40=109.84 param44=197 param48=110.03 both drain in combat; the gauge refills
+//
+// So [param+0x48] is the 99/amrita gauge and it shares the maximum at [param+0x44] (the
+// Ki maximum): it never exceeded it in 120 samples, and it sat at 0 while Ki was full.
+// "+10% of the gauge" is therefore `cur += 0.10f * max`, clamped at max.
+//
+// Guard rails, because this writes a game field from an exception handler: the maximum
+// must look like a maximum, the current value must be inside [0, max], and the write only
+// ever *raises* the value, never above the maximum.
+#define PG_LW_BURN_OFF 0xCC
+#define PG_LW_BURN_MAX 100.0f
+#define PG_LW_CUR_MAX 100000.0f
+
 static void lw_plan_on_guard(void) {
     int in_lw = (int)InterlockedCompareExchange(&g_lw_seen_in_state, 0, 0);
     int pct = pg_lw_plan(g_cfg.lw_gauge_on, g_cfg.lw_gauge_percent,
                          g_cfg.lw_extend_on, g_cfg.lw_extend_percent, in_lw);
-    if (pct > 0) InterlockedExchange(&g_lw_pending_pct, pct);
-}
+    if (pct <= 0 || !g_base) return;
+    void *player = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+    if (!player) return;
+    void *param = *(void **)((char *)player + 0x240);
+    if (!param) return;
 
-// Same rule as the timed-buff constructors: prove the function stamps its own state
-// id before jumping into it, because a game update that moves it would otherwise be
-// an unrecoverable jump into arbitrary code.
-static int lw_engine_verify(void) {
-    if (g_lw_engine_ok >= 0) return g_lw_engine_ok;
-    g_lw_engine_ok = 0;
-    if (!g_base) return 0;
-    const unsigned char *p =
-        (const unsigned char *)(ULONG_PTR)(g_base + PG_RVA_STATE_CTOR_AMRITA_UP);
-    int at = ctor_stamps_state_id(p, PG_CTOR_ID_SCAN, PG_STATE_ID_AMRITA_UP);
-    log_line("LW engine: the 99-gauge constructor at 0x%llX %s state id 0x%X in its "
-             "first %d bytes", (unsigned long long)(ULONG_PTR)p,
-             at >= 0 ? "stamps" : "does NOT stamp", PG_STATE_ID_AMRITA_UP,
-             PG_CTOR_ID_SCAN);
-    g_lw_engine_ok = at >= 0;
-    return g_lw_engine_ok;
-}
-
-// Runs on the input thread. Takes the parked percentage, adds one state node and
-// lets the engine expire it.
-static void lw_gauge_tick(void) {
-    LONG pct = InterlockedExchange(&g_lw_pending_pct, 0);
-    if (pct <= 0) return;
-    if (!buff_engine_calls_enabled()) return;
-    if (!lw_engine_verify()) return;
-    void *mgr = buff_manager();
-    if (!mgr) return;
-
-    float mag = (float)pct / 100.0f;
-    pg_state_ctor_fn ctor =
-        (pg_state_ctor_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_CTOR_AMRITA_UP);
-    pg_state_add_fn add = (pg_state_add_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_ADD);
-
-    void *obj = ctor(mgr, PG_LW_STATE_DURATION_S, mag);
-    if (!obj) {
+    // Two different bars, measured on a real session:
+    //   [param+0xCC] is the burning bar: 0 -> 100 the moment the 99 state starts and
+    //                then draining to 0 over ~33s. "Extend the burn" = add percentage
+    //                points to it (clamped at 100).
+    //   [param+0x48] is the essence gauge: one small spirit stone adds ~212 and three
+    //                fill it, so its maximum is ~636 -- NOT [param+0x44] (that is the Ki
+    //                maximum, 212, and clamping to it is why the earlier version never
+    //                changed anything). "Accumulate" = add pct% of the configured 636.
+    float burn = *(float *)((char *)param + PG_LW_BURN_OFF);
+    if (burn > 0.0f) {
+        float nv = burn + (float)pct;
+        if (nv > PG_LW_BURN_MAX) nv = PG_LW_BURN_MAX;
+        if (nv > burn) {
+            *(float *)((char *)param + PG_LW_BURN_OFF) = nv;
+            InterlockedExchange(&g_lw_wrote, 1);
+            g_lw_wrote_val = nv; g_lw_wrote_max = PG_LW_BURN_MAX; g_lw_back = 0;
+            InterlockedExchange(&g_lw_verify_off, PG_LW_BURN_OFF);
+            InterlockedExchange(&g_lw_verify_int, 0);
+        }
         if (g_lw_log < 30) {
-            log_line("LW gauge: +%ld%% FAILED (constructor returned NULL)", pct);
+            log_line("LW burn: +%ld%% %g -> %g (max %g, in 99 state=1)", pct, burn, nv,
+                     PG_LW_BURN_MAX);
             g_lw_log++;
         }
         return;
     }
-    unsigned char ok = add(mgr, PG_STATE_ID_AMRITA_UP, obj, -1, 0);
+
+    // The real store is an INT counter pair inside the amrita/99 cluster (param+0xB0):
+    //   [param+0xC0] = counter, [param+0xC8] = its maximum, written by the engine's own
+    //   "recover the amrita gauge" primitive 0x7AF370 (`sub+0x10 += n`, clamped by
+    //   `sub+0x18`). A float-based scan could never see it: an int read as a float is a
+    //   denormal (~1e-43), far below any threshold -- which is why ten rounds of float
+    //   scanning found nothing.
+    if (g_cfg.lw_gauge_offset <= 0) return;
+    int *icur = (int *)((char *)param + g_cfg.lw_gauge_offset);
+    int *imax = (int *)((char *)param + g_cfg.lw_gauge_offset + 8);
+    int c = *icur, mx = *imax;
+    if (g_cfg.lw_gauge_max > 0) mx = g_cfg.lw_gauge_max;   // 0 = use the runtime maximum
+    if (mx <= 0 || mx > 1000000) return;               // not a counter/max pair
+    if (c < 0 || c > mx) return;
+    int nv = c + (int)((long long)pct * mx / 100);
+    if (nv > mx) nv = mx;
+    if (nv <= c) return;                               // already full
+    *icur = nv;
+    g_lw_wrote_val = (float)nv; g_lw_wrote_max = (float)mx; g_lw_back = 0;
+    InterlockedExchange(&g_lw_verify_off, g_cfg.lw_gauge_offset);
+    InterlockedExchange(&g_lw_verify_int, 1);
+    InterlockedExchange(&g_lw_wrote, 1);
     if (g_lw_log < 30) {
-        int seen = buff_state_present(mgr, PG_STATE_ID_AMRITA_UP, obj);
-        log_line("LW gauge: +%ld%% via AmritaGaugeUp state 0x%llX (in 99 state=%ld "
-                 "[container 0x22=%ld, flag=%ld], add()=%u, container check: %s)", pct,
-                 (unsigned long long)obj,
-                 (long)InterlockedCompareExchange(&g_lw_seen_in_state, 0, 0),
-                 (long)InterlockedCompareExchange(&g_lw_seen_present, 0, 0),
-                 (long)InterlockedCompareExchange(&g_lw_seen_flag, 0, 0),
-                 (unsigned)ok,
-                 seen == 1 ? "present" : (seen == 0 ? "NOT FOUND" : "unreadable"));
+        log_line("LW gauge: +%ld%% %d -> %d (max %d, in 99 state=%ld)", pct, c, nv, mx,
+                 (long)in_lw);
         g_lw_log++;
     }
+    return;
 }
+
+// (The engine-call route and its byte check were removed here: it was proven to have no
+// effect in game -- see the LWD measurement and CHANGELOG 2.0j.)
 
 // Guard cancels the player's attack action.
 //
@@ -3214,7 +3446,8 @@ static DWORD WINAPI input_thread(LPVOID param) {
         buff_watchdog_config();
         buff_tick();
         lw_refresh_state();
-        lw_gauge_tick();
+        lw_diag();
+        lw_scan();
         poll_hotkey();
         Sleep(8);
     }

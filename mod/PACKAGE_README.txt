@@ -76,7 +76,7 @@ Press guard at the moment you are hit -> perfect guard, with rewards:
   martial-skill input) is left to the game; movement never blocks the cancel.
 * Parry sound (replaceable WAV)
 * Optional, off by default: Ki/HP damage to the enemy that was blocked
-* **99 gauge** (amrita / guardian-spirit gauge), on by default: add N% per
+* **99 gauge** (amrita / guardian-spirit gauge), **off for now**: add N% per
   perfect guard while the 99 state is inactive, and/or extend the burning gauge by N%
   while it is active (`LivingWeapon*` keys in the INI)
 
