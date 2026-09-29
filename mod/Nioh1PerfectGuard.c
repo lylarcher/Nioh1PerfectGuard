@@ -258,7 +258,10 @@ static void config_defaults(Config *c) {
     // store is identified this is 0 = disabled; the offset can then be set from the INI
     // without a new build.
     c->lw_gauge_offset = 0xC0;    // int counter inside the amrita/99 cluster
-    c->lw_extend_on = 1;
+    // The burn write works (LWD2 proved it: wrote 78.42, read back 78.19), but the bar
+    // drains at ~15/s in game, so +10 points is ~0.7s -- imperceptible. Parked for
+    // v0.1.2 with a sensible magnitude; off by default in v0.1.1 by decision.
+    c->lw_extend_on = 0;
     c->lw_extend_percent = 10;
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
     // and unlike the timed buffs it needs no engine calls -- it only advances the
