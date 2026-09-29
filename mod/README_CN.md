@@ -1,4 +1,4 @@
-# 仁王 1 · 精准防御（精防）MOD — v0.1.3
+# 仁王 1 · 精准防御（精防）MOD — v1.0.0-alpha
 
 在《仁王 1 完全版》（Nioh: Complete Edition，`nioh.exe` 1.24.8）中实现类似仁王 3
 「Guard Parry / 精准防御」的格挡收益。

@@ -1,4 +1,4 @@
-# Nioh 1 · Perfect Guard — v0.1.3
+# Nioh 1 · Perfect Guard — v1.0.0-alpha
 
 Timed-guard rewards for *Nioh: Complete Edition* (`nioh.exe` 1.24.8), in the spirit
 of Nioh 3's Guard Parry.

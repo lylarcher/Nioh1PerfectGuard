@@ -35,7 +35,7 @@
 // tests cannot drift away from what ships.
 #include "pg_logic.h"
 
-#define MOD_VERSION "0.1.3-nioh1"
+#define MOD_VERSION "1.0.0-alpha"
 #define PG_RVA_DMGRATE_RESET 0x79E361   // right after the per-frame reset of mgr+0x24/+0x28
 #define MAX_TARGETS 4
 #define MAX_ARMED 8192
