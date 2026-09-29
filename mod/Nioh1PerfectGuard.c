@@ -207,6 +207,7 @@ typedef struct {
 static Config g_cfg;
 static int g_cfg_loaded = 0;
 static volatile unsigned long long g_player_mgr = 0;   // player state manager, cached each tick
+static int g_hp_prev = 0;          // player HP as of the previous input tick (parry-key path)
 static FILETIME g_ini_mtime = {0, 0};
 
 static void config_defaults(Config *c) {
@@ -996,6 +997,33 @@ static void poll_guard_button(void) {
         int pdown = ((buttons & pmask) != 0);
         if (pg_guard_update(&g_parry_in, pdown, at_press)) {
             g_guard_in.press_ms = at_press;   // the shared gate reads this timestamp
+            if (g_guard_presses < 60) {
+                log_line("GUARD pressed (pad=0x%04X mask=0x%04X key=0x%02X key_down=0)",
+                         buttons, pmask, 0);   // the parry key, told apart by its mask
+            }
+        }
+    }
+    // The parry key does not make the engine guard (Y is a heavy attack), so there is no
+    // block event to reward. Use a different, provable criterion instead: if the parry key
+    // was pressed within WindowMs *before* the player lost HP, call it a parry and NEGATE
+    // that damage -- the 石火 / 化解 fantasy -- then run the normal reward path (Ki, HP,
+    // damage cut, 99 gauge, sound). Nothing is injected into the input state, so the attack
+    // the key belongs to still comes out normally.
+    if (g_cfg.parry_button_mask != 0 && g_base) {
+        void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+        void *pa = pl ? *(void **)((char *)pl + 0x240) : NULL;
+        if (pa) {
+            int hp = *(int *)((char *)pa + 0x20);
+            if (g_hp_prev > 0 && hp < g_hp_prev) {
+                unsigned long long press = g_parry_in.press_ms;
+                if (press != 0 && at_press >= press &&
+                    (at_press - press) <= (unsigned long long)g_cfg.window_ms) {
+                    *(int *)((char *)pa + 0x20) = g_hp_prev;   // undo the hit
+                    perfect_guard_rewards(1);
+                    g_parry_in.press_ms = 0;                   // one parry per press
+                }
+            }
+            g_hp_prev = hp;
         }
     }
     int attack_down = ((buttons & (unsigned short)g_cfg.attack_button_mask) != 0);
