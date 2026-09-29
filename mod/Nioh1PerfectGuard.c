@@ -261,8 +261,8 @@ static void config_defaults(Config *c) {
     // The burn write works (LWD2 proved it: wrote 78.42, read back 78.19), but the bar
     // drains at ~15/s in game, so +10 points is ~0.7s -- imperceptible. Parked for
     // v0.1.2 with a sensible magnitude; off by default in v0.1.1 by decision.
-    c->lw_extend_on = 0;
-    c->lw_extend_percent = 10;
+    c->lw_extend_on = 1;
+    c->lw_extend_percent = 25;
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
     // and unlike the timed buffs it needs no engine calls -- it only advances the
     // current action's motion frame, the same kind of write this mod already makes.
@@ -491,6 +491,20 @@ static int config_load_inner(int first_time) {
 
     if (!ok) {
         log_line("CONFIG gameplay group rejected; previous settings kept");
+        if (!g_cfg_loaded) {
+            // On the *first* load there is no previous configuration: g_cfg is still the
+            // zero-initialised global, so a single out-of-range key used to leave
+            // Enabled=0 and make the mod look completely dead (it happened:
+            // LivingWeaponGaugeMax=0 fell outside its allowed 1..100000 range). Fall back
+            // to the compiled defaults instead, and say so.
+            Config d;
+            config_defaults(&d);
+            g_cfg = d;
+            g_cfg_loaded = 1;
+            log_line("CONFIG: first load rejected a key, so the built-in defaults are in "
+                     "use (Enabled=%d). Fix the key above and reload, or delete the INI to "
+                     "start from the shipped one.", d.enabled);
+        }
         return 1;
     }
     // Installation is a one-shot decision made at startup, so flipping Enabled at
