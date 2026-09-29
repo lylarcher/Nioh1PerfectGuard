@@ -242,7 +242,7 @@ static void config_defaults(Config *c) {
     // (with -100% configured the player still took exactly the same 254 damage), so this
     // ships at 0 until the replacement route (a write-breakpoint on the per-frame reset
     // of mgr+0x24, scaled in the VEH handler) lands.
-    c->damage_cut_percent = 0.0f;
+    c->damage_cut_percent = 50.0f;   // v0.1.3: direct write of the damage-taken accumulators
     c->damage_cut_ms = 10000;
     c->armor_buff = 1;               // v0.1.3: no hit stun while active
 
@@ -1916,7 +1916,7 @@ static void buff_tick(void) {
     for (int i = 0; i < 3; ++i) {
         PgBuff *t = g_eng[i].timer;
         int expired = pg_buff_step(t, now);
-        if (t->active && i != 2) {   // armor (i==2) uses a direct bit write, below
+        if (t->active && i != 1 && i != 2) {   // 1 = damage cut and 2 = armor are direct writes
             if (!g_eng[i].installed || t->procs != g_eng[i].procs_at_install)
                 buff_engine_install(i);   // engine replaces same-id state -> refresh
         } else if (g_eng[i].installed) {
@@ -1945,6 +1945,30 @@ static void buff_tick(void) {
     // so setting that bit IS the effect. The engine clears it at the top of every frame
     // (0x79E320), and this tick runs every 8ms -- about twice per frame -- so the consumer
     // sees it set. No engine code is called at all.
+    // Damage cut: the state-object route is inert (measured: -100% still took exactly the
+    // same hit), so scale the engine's own damage-taken accumulators instead. Static facts:
+    //   * 0x79E353 / 0x79E35A reset mgr+0x24 and mgr+0x28 to 1.0f at the top of every frame
+    //   * the damage resolution multiplies by them (0x7278C7: mulss xmm7,[rsi+0x28])
+    // So poll them: whenever the current value is still ABOVE our target factor, scale it
+    // once. The engine's own reset is what raises it back, so this applies exactly once per
+    // frame, never compounds, and preserves engine modifiers (e.g. the block reduction
+    // 0.95 -> 0.95*factor). All four hardware-breakpoint slots are taken by the anchors,
+    // which is why this is a poll rather than a write-breakpoint.
+    if (g_buff_dmgcut.active && g_base && g_cfg.damage_cut_percent > 0.0f) {
+        float f = 1.0f - (float)g_cfg.damage_cut_percent / 100.0f;
+        if (f < 0.0f) f = 0.0f;
+        if (f < 1.0f) {
+            void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+            void *pa = pl ? *(void **)((char *)pl + 0x240) : NULL;
+            if (pa) {
+                float *a24 = (float *)((char *)pa + 0x10B0 + 0x24);
+                float *a28 = (float *)((char *)pa + 0x10B0 + 0x28);
+                if (*a24 > f) *a24 *= f;
+                if (*a28 > f) *a28 *= f;
+            }
+        }
+    }
+
     if (g_buff_armor.active && g_base) {
         void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
         void *pa = pl ? *(void **)((char *)pl + 0x240) : NULL;
