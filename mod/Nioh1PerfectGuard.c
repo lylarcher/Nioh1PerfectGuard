@@ -36,6 +36,7 @@
 #include "pg_logic.h"
 
 #define MOD_VERSION "0.1.2-nioh1"
+#define PG_RVA_DMGRATE_RESET 0x79E361   // right after the per-frame reset of mgr+0x24/+0x28
 #define MAX_TARGETS 4
 #define MAX_ARMED 8192
 #define LOG_CAP (MAX_PATH * 2)
@@ -201,6 +202,7 @@ typedef struct {
 
 static Config g_cfg;
 static int g_cfg_loaded = 0;
+static volatile unsigned long long g_player_mgr = 0;   // player state manager, cached each tick
 static FILETIME g_ini_mtime = {0, 0};
 
 static void config_defaults(Config *c) {
@@ -1185,6 +1187,17 @@ static BOOL arm_thread(HANDLE th) {
             dr7 |= (DWORD64)1 << (slot * 2);
             slot++;
         }
+        // The damage-cut site needs one DR slot; the input-manager anchor is deliberately not
+        // armed (its address is derived statically from its instruction bytes), so the 4th slot
+        // is free. Trapping the instruction right after the engine resets mgr+0x24 and mgr+0x28
+        // to 1.0f lets the VEH scale them deterministically -- the state-object route for damage
+        // reduction is inert (measured) and polling loses the race against the same-frame
+        // damage resolution.
+        if (slot < 4 && g_cfg.damage_cut_percent > 0.0f) {
+            (&ctx.Dr0)[slot] = g_base + PG_RVA_DMGRATE_RESET;
+            dr7 |= (DWORD64)1 << (slot * 2);
+            slot++;
+        }
         // Keep whatever reserved bits the OS put in DR7; only own L0..G3 and the
         // RW/LEN fields. Wiping the whole register (the original behaviour) still
         // traps 5/5 on this machine, but it needlessly discards information the
@@ -1954,6 +1967,11 @@ static void buff_tick(void) {
     // frame, never compounds, and preserves engine modifiers (e.g. the block reduction
     // 0.95 -> 0.95*factor). All four hardware-breakpoint slots are taken by the anchors,
     // which is why this is a poll rather than a write-breakpoint.
+    if (g_base) {
+        void *pl0 = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+        void *pa0 = pl0 ? *(void **)((char *)pl0 + 0x240) : NULL;
+        g_player_mgr = pa0 ? (unsigned long long)(ULONG_PTR)((char *)pa0 + 0x10B0) : 0;
+    }
     if (g_buff_dmgcut.active && g_base && g_cfg.damage_cut_percent > 0.0f) {
         float f = 1.0f - (float)g_cfg.damage_cut_percent / 100.0f;
         if (f < 0.0f) f = 0.0f;
@@ -3541,6 +3559,22 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep) {
     if (g_selftest_target && rip == g_selftest_target) {
         c->EFlags |= 0x10000;
         InterlockedIncrement(&g_selftest_hits);
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    // Damage-cut: fires immediately after the engine reset both damage-taken accumulators to
+    // 1.0f. rcx is the manager there, so scaling the two floats in place is deterministic and
+    // costs no engine call. Only the player own manager is touched (cached each tick).
+    if (rip == g_base + PG_RVA_DMGRATE_RESET) {
+        c->EFlags |= 0x10000;                    // resume flag, or it fires again at once
+        unsigned long long mgr = g_player_mgr;
+        if (g_buff_dmgcut.active && mgr && (unsigned long long)c->Rcx == mgr) {
+            float f = 1.0f - (float)g_cfg.damage_cut_percent / 100.0f;
+            if (f < 0.0f) f = 0.0f;
+            if (f < 1.0f) {
+                *(float *)((char *)mgr + 0x24) *= f;
+                *(float *)((char *)mgr + 0x28) *= f;
+            }
+        }
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     for (int i = 0; i < g_anchor_count; ++i) {
