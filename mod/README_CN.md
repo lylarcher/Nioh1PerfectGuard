@@ -1,4 +1,4 @@
-# 仁王 1 · 精准防御（精防）MOD — v0.1.2
+# 仁王 1 · 精准防御（精防）MOD — v0.1.3
 
 在《仁王 1 完全版》（Nioh: Complete Edition，`nioh.exe` 1.24.8）中实现类似仁王 3
 「Guard Parry / 精准防御」的格挡收益。
@@ -131,9 +131,9 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `HpRecoveryMode` | 1 | **精防回血**：0 关 / **1 按最大 HP 百分比（默认）** / 2 固定值 / 3 两者相加 |
 | `HpRestorePercent` | 3 | 每次精防回复**最大 HP 的 3%**（向下取整：3% of 880 = 26） |
 | `HpRestoreFixed` | 50 | 模式 2 或 3 使用的固定回血量 |
-| `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **精防后移速增益**（0 = 关）。想启用设成 4。⚠ 本轮默认关：这是唯一调用游戏代码的功能，尚未实机验证 |
-| `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **精防后承受伤害降低**（0 = 关）。想启用设成 4 |
-| `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **霸体**（已决定不使用，见下） |
+| `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **精防后移速增益**（0 = 关，未实现） |
+| `DamageCutPercent` / `DamageCutMs` | **50** / 10000 | **精防后承受伤害降低**（✅ 已实机验证生效）。走引擎每帧重置点的执行断点 + VEH 缩放，**不调用任何游戏代码**；与装备减伤是**乘算**（引擎原生语义，装备 10% + 本项 50% ≈ 55%） |
+| `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **霸体**：写 `param+0x10B8` bit 11（零引擎调用）。默认关 —— 实测设置该位未能改变硬直，实现保留待查 |
 | `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` / `LivingWeaponGaugeMax` / `LivingWeaponGaugeOffset` | **1** / 10 / **515** / **0x100** | **九十九槽（精华量表 / 守护灵槽）积累**：每次精防加 N% 槽，**默认开**、默认 10% |
 | `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **1** / **35** | **九十九状态中续烧条**：在九十九状态下每次精防续 N%，**默认开**、默认 10% |
 | `CancelActionOnGuard` | **1** | **单按防御键取消当前动作**（0 = 关）：攻击/武技、喝药、上阴阳符、上咒术忍术、丢道具都算。防御+X/Y/A 这类组合键**不算**；移动不影响 |
