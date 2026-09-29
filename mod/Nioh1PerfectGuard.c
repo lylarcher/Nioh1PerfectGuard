@@ -208,6 +208,7 @@ static Config g_cfg;
 static int g_cfg_loaded = 0;
 static volatile unsigned long long g_player_mgr = 0;   // player state manager, cached each tick
 static int g_hp_prev = 0;          // player HP as of the previous input tick (parry-key path)
+static int g_parry_shield = 0;     // 1 while the HP pool is held above max during a parry window
 static FILETIME g_ini_mtime = {0, 0};
 
 static void config_defaults(Config *c) {
@@ -1021,6 +1022,7 @@ static void poll_guard_button(void) {
                     *(int *)((char *)pa + 0x20) = g_hp_prev;   // undo the hit
                     perfect_guard_rewards(1);                  // rewards may heal on top
                     g_parry_in.press_ms = 0;                   // one parry per press
+                    g_parry_shield = 0;                       // nothing left to hand back
                     // Re-read: the reward path heals (HpRecoveryMode), so the value we
                     // remember for the next comparison must be the CURRENT one. Storing the
                     // pre-write value here would make a second hit in the next tick restore
@@ -1029,6 +1031,40 @@ static void poll_guard_button(void) {
                 }
             }
             g_hp_prev = hp;
+        }
+    }
+    // Lethal-hit protection (measured to be necessary): a post-hoc restore cannot save the
+    // player, because the engine commits the death in the same frame the hit lands
+    // ("negating" afterwards left the character dead). So while a parry press is fresh, hold
+    // the HP pool far ABOVE its maximum: no single hit can reach zero, so no death is ever
+    // committed. When the window closes (or a hit inside it is negated) the true value goes
+    // back. Cost: the HP bar reads oddly for at most WindowMs, which is the trade we accept
+    // for a parry that works on lethal hits.
+    if (g_cfg.parry_button_mask != 0 && g_base) {
+        void *pl2 = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+        void *pa2 = pl2 ? *(void **)((char *)pl2 + 0x240) : NULL;
+        unsigned long long press2 = g_parry_in.press_ms;
+        int open2 = (press2 != 0 && at_press >= press2 &&
+                     (at_press - press2) <= (unsigned long long)g_cfg.window_ms);
+        if (pa2) {
+            int *hpn = (int *)((char *)pa2 + 0x20);
+            int *hpm = (int *)((char *)pa2 + 0x18);
+            if (open2 && g_hp_prev > 0) {
+                int mx = *hpm;
+                if (mx < 1) mx = 1;
+                int shield = mx * 4;
+                if (*hpn < shield) {
+                    *hpn = shield;
+                    g_parry_shield = 1;
+                    g_hp_prev = shield;
+                }
+            } else if (g_parry_shield) {
+                // Window closed without a hit: hand the true value back (but never cut a
+                // heal that something else performed in the meantime).
+                if (*hpn > g_hp_prev) *hpn = g_hp_prev;
+                g_parry_shield = 0;
+                g_hp_prev = *hpn;
+            }
         }
     }
     int attack_down = ((buttons & (unsigned short)g_cfg.attack_button_mask) != 0);
