@@ -1,8 +1,5 @@
 @echo off
-rem 重新打包配置界面 exe（需要 .venv 里已安装 pyinstaller）
-setlocal
-cd /d "%~dp0.."
-if not exist .venv\Scripts\python.exe ( echo 先执行: python -m venv .venv ^&^& .venv\Scripts\python -m pip install pyinstaller & pause & exit /b 1 )
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --windowed --name Nioh1PerfectGuard-Config --distpath tools\gui_dist --workpath _work\pyi --specpath _work\pyi tools\ini_gui.py
-echo 输出: tools\gui_dist\Nioh1PerfectGuard-Config.exe
+rem 仁王1 精防 MOD - 配置界面 exe 构建 / build the config GUI exe
+rem 实际逻辑在 tools\build_gui.ps1（单一来源），这里只是双击入口。
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_gui.ps1" %*
 pause
