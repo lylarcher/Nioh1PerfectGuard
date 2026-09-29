@@ -1716,6 +1716,54 @@ static void *buff_manager(void) {
 // for a same-state replacement). We key by state id: the engine's own applications
 // of these classes use other keys (0x45 / 0x16 / 0x34), so ours cannot displace a
 // game buff, and re-installing our own replaces our own -- the refresh we want.
+// ---- additive damage reduction -----------------------------------------------------
+// The engine MULTIPLIES damage-taken modifiers: AddStateObjectDamageRate (id 0x1E) has
+// vtable 0x11A8280 and its per-tick apply 0x7A8C30 is literally
+//     movss xmm0,[rdx+0x24] / mulss xmm0,[rcx+0x50] / movss [rdx+0x24],xmm0   (+0x28)
+// i.e. every active object scales the manager's shared accumulator. There is no additive
+// damage-reduction class anywhere in the image (all 86 AddStateObject applies classified:
+// damage/stamina/attack ones are mulss, the addss ones are resource gains).
+//
+// So handing the engine 0.90 would MULTIPLY with the gear's reduction: 10% gear + 10% mod
+// = 0.9*0.9 = 0.81 -> 19%, not the 20% the operator asked for. To make the total additive
+// the mod must ask for
+//     our = (F_other - r_mod) / F_other,   F_other = product of [obj+0x50] over every
+//     OTHER 0x1E object  (= 1 - r_gear)
+// which yields exactly r_gear + r_mod. F_other is read from the very tree add() inserts
+// into, so nothing new has to be located; with no other 0x1E object F_other = 1 and the
+// formula falls back to the plain multiplier.
+static float buff_damage_rate_product(void *mgr, void *exclude) {
+    if (!mgr) return -1.0f;
+    HANDLE self = GetCurrentProcess();
+    void *root = NULL;
+    SIZE_T got = 0;
+    if (!ReadProcessMemory(self, (char *)mgr + 0x170, &root, sizeof(root), &got) || !root)
+        return -1.0f;                       // tree unreadable: caller falls back
+    void *stack[64];
+    int sp = 0, visited = 0;
+    float prod = 1.0f;
+    stack[sp++] = root;
+    while (sp > 0 && visited < PG_STATE_TREE_MAX) {
+        void *n = stack[--sp];
+        if (!n) continue;
+        visited++;
+        void *l = NULL, *r = NULL, *so = NULL;
+        ReadProcessMemory(self, (char *)n + 0x00, &l, sizeof(l), &got);
+        ReadProcessMemory(self, (char *)n + 0x10, &r, sizeof(r), &got);
+        if (!ReadProcessMemory(self, (char *)n + 0x28, &so, sizeof(so), &got)) continue;
+        if (so && so != exclude) {
+            int sid = -1;
+            float rate = 0.0f;
+            if (ReadProcessMemory(self, (char *)so + 0x10, &sid, sizeof(sid), &got) &&
+                sid == PG_STATE_ID_DAMAGE_RATE &&
+                ReadProcessMemory(self, (char *)so + 0x50, &rate, sizeof(rate), &got) &&
+                rate > 0.0f && rate < 10.0f)
+                prod *= rate;
+        }
+        if (sp < 62) { stack[sp++] = l; stack[sp++] = r; }
+    }
+    return prod;
+}
 static int buff_engine_install(int i) {
     buff_engine_init();
     BuffEngine *e = &g_eng[i];
@@ -1726,6 +1774,29 @@ static int buff_engine_install(int i) {
 
     float rate = buff_rate(i);
     if (rate < 0.0f) rate = 0.0f;
+
+    // Damage reduction is additive with the gear's own reduction (operator requirement):
+    // convert "another N% off" into the multiplier that achieves it on top of F_other.
+    if (i == 1 && g_cfg.damage_cut_percent > 0.0f) {
+        float f_other = buff_damage_rate_product(mgr, e->obj);
+        if (f_other > 0.0f && f_other <= 1.0f) {
+            float r_mod = (float)g_cfg.damage_cut_percent / 100.0f;
+            float want = f_other - r_mod;
+            if (want < 0.0f) want = 0.0f;
+            float corrected = want / f_other;
+            if (g_buff_log < 40) {
+                log_line("BUFF dmgcut: additive correction gear_product=%.4f "
+                         "requested=%.4f -> %.4f (total reduction %.1f%%)",
+                         f_other, rate, corrected, (1.0f - corrected * f_other) * 100.0f);
+                g_buff_log++;
+            }
+            rate = corrected;
+        } else if (g_buff_log < 40) {
+            log_line("BUFF dmgcut: gear product unreadable (%.4f); using the plain "
+                     "multiplier %.4f (stacks multiplicatively this time)", f_other, rate);
+            g_buff_log++;
+        }
+    }
 
     pg_state_ctor_fn ctor = (pg_state_ctor_fn)(ULONG_PTR)(g_base + e->ctor_rva);
     pg_state_add_fn add = (pg_state_add_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_ADD);
