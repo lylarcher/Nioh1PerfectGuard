@@ -1764,6 +1764,16 @@ static float buff_damage_rate_product(void *mgr, void *exclude) {
     }
     return prod;
 }
+// The RB-tree key is NOT the state id, and add() replaces DESTRUCTIVELY by key: the
+// engine's own ability branch (0x724777) puts an id 0x4C object under key 0x33, so using
+// key = state_id for Armor let the engine erase the mod's node. Use keys that none of the
+// engine's 49 add() call sites use (their keys: 0,1,3,0x17,0x18,0x19,0x2b,0x31..0x36,
+// 0x3b,0x3c,0x3e..0x42,0x44,0x45,0x46,0x4d,0x50,0xb0,0x13c + a few variable ones).
+static int buff_key(int i) {
+    if (i == 0) return 0x1C;   // speed
+    if (i == 1) return 0x1E;   // damage rate
+    return 0x1F;               // armor (0x33 is an engine key -> would be erased)
+}
 static int buff_engine_install(int i) {
     buff_engine_init();
     BuffEngine *e = &g_eng[i];
@@ -1814,7 +1824,7 @@ static int buff_engine_install(int i) {
         InterlockedIncrement(&g_buff_failed);
         return 0;
     }
-    unsigned char ok = add(mgr, e->state_id, obj, -1, 0);
+    unsigned char ok = add(mgr, buff_key(i), obj, -1, 0);
     e->obj = obj;
     e->installed = 1;
     e->procs_at_install = e->timer->procs;
