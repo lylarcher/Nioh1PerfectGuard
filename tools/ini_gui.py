@@ -121,6 +121,61 @@ PRESETS = [
                   "LivingWeaponGaugePercent": "10", "LivingWeaponExtendPercent": "35",
                   "ArmorBuff": "0"}),
 ]
+# ---- 中英切换 / language toggle ------------------------------------------------------
+# 用"中文原文 -> 英文"的查表方式翻译，SCHEMA 本身不必改动：查不到就沿用原文，
+# 所以界面永远不会出现空白项，未翻译的长说明会自然回落到中文（界面里会标注覆盖范围）。
+LANG = {"cur": "zh"}
+EN = {
+    # UI 外壳
+    "预设 / Presets:": "Presets:",
+    "打开…": "Open…", "打开文件夹": "Open folder", "重新载入": "Reload",
+    "保存": "Save", "退出": "Quit", "恢复备份…": "Restore backup…",
+    "选择要恢复的备份（会先备份当前文件）：": "Pick a backup to restore (the current file is backed up first):",
+    "恢复": "Restore", "语言 / Language": "语言 / Language",
+    "高级 / Advanced（改动前请先读说明）": "Advanced (read the notes before changing)",
+    "其他 / Other": "Other",
+    # 分节标题
+    "01 · 基本设置 / General": "01 · General",
+    "02 · 精防判定 / What counts": "02 · What counts as a perfect guard",
+    "03 · 格挡耗精 / Guard Ki cost": "03 · Guard Ki cost",
+    "04 · 回精 / Ki recovery": "04 · Ki recovery",
+    "04b · 回血 / HP restore": "04b · HP restore",
+    "04c · 精防后的限时增益 / Timed buffs": "04c · Timed buffs after a perfect guard",
+    "06 · 九十九槽（精华量表）/ 99 gauge": "06 · 99 gauge (Living Weapon)",
+    "04d · 防御取消当前动作 / Guard cancel": "04d · Guard cancels the current action",
+    "05 · 对敌效果 / Enemy effects": "05 · Enemy effects",
+    "06 · 音效 / Sound": "06 · Sound",
+    "07 · 日志 / Logs": "07 · Logs",
+    # 常用键的标签
+    "总开关": "Master switch", "精防判定窗口 (ms)": "Perfect-guard window (ms)",
+    "取消硬直恢复": "Cancel recovery", "跳过的帧数": "Frames skipped",
+    "要求「新按下」": "Require a fresh press", "防御键位掩码": "Guard button mask",
+    "精防触发键（可选）": "Parry trigger (optional)", "手柄槽位": "Pad slot",
+    "键鼠防御键 (VK)": "Guard key VK (keyboard)", "按键学习": "Learn buttons",
+    "耗精追踪": "Ki trace", "诊断位掩码": "Diagnostics mask",
+    "格挡事件来源": "Block event source", "格挡耗精减免 %": "Guard Ki cost reduction %",
+    "精防回精": "Ki top-up on parry", "回精参考窗口 (ms)": "Ki top-up reference (ms)",
+    "模式": "Mode", "固定回复量": "Fixed recovery",
+    "回复 %": "Restore %", "固定回复量 ": "Fixed restore",
+    "承受伤害降低 %": "Damage taken reduction %", "减伤持续 (ms)": "Damage cut duration (ms)",
+    "霸体（无硬直）": "Armour (no hit-stun)", "霸体持续 (ms)": "Armour duration (ms)",
+    "移速增益 %": "Move speed %", "移速持续 (ms)": "Move speed duration (ms)",
+    "精防攒槽": "Gauge gain on parry", "攒槽 %": "Gauge gain %",
+    "精防续烧条": "Extend the 99 burn", "续烧条百分点": "Burn points added",
+    "防御取消攻击": "Guard cancels attacks", "攻击键位掩码": "Attack button mask",
+    "连段窗口 (ms)": "Combo window (ms)", "要求按住": "Require hold",
+    "最近动作窗口 (ms)": "Recent action window (ms)",
+    "削减敌精": "Enemy Ki damage", "削减敌血": "Enemy HP damage",
+    "音效开关": "Sound", "音量": "Volume", "音频文件": "Audio file",
+    "诊断热键": "Diagnostic hotkey",
+}
+
+
+def L(s):
+    """Translate one UI string (falling back to the original)."""
+    if LANG["cur"] == "en":
+        return EN.get(s, s)
+    return s
 class IniFile:
     """逐行保存的 INI：只替换值，其他一切都原样留下。"""
 
@@ -253,15 +308,16 @@ class App:
         bar.pack(fill="x")
         self.lbl = ttk.Label(bar, text=self.path, foreground="#333")
         self.lbl.pack(side="left")
-        ttk.Button(bar, text="打开…", command=self.open_other).pack(side="right")
+        ttk.Button(bar, text=L("打开…"), command=self.open_other).pack(side="right")
         ttk.Button(bar, text="打开文件夹", command=self.open_folder).pack(side="right", padx=6)
         ttk.Button(bar, text="重新载入", command=self.reload).pack(side="right")
 
         pre = ttk.Frame(root, padding=(10, 0, 10, 6))
         pre.pack(fill="x")
-        ttk.Label(pre, text="预设 / Presets:").pack(side="left")
+        ttk.Label(pre, text=L("预设 / Presets:")).pack(side="left")
         for name, kv in PRESETS:
             ttk.Button(pre, text=name, command=lambda kv=kv: self.apply_preset(kv)).pack(side="left", padx=4)
+        ttk.Button(pre, text="语言 / Language", command=self.toggle_lang).pack(side="right")
 
         outer = ttk.Frame(root)
         outer.pack(fill="both", expand=True)
@@ -308,7 +364,7 @@ class App:
             order.append("其他 / Other")
 
         for title in order:
-            ttk.Label(self.body, text=title, font=("Segoe UI", 10, "bold"),
+            ttk.Label(self.body, text=L(title), font=("Segoe UI", 10, "bold"),
                       padding=(12, 12, 8, 4)).pack(anchor="w")
             for key, label, kind, lo, hi, hint in groups[title]:
                 if key not in self.ini.values:
@@ -318,7 +374,7 @@ class App:
                     continue
                 row = ttk.Frame(self.body, padding=(22, 2))
                 row.pack(fill="x")
-                ttk.Label(row, text=label, width=22).pack(side="left")
+                ttk.Label(row, text=L(label), width=26).pack(side="left")
                 var = tk.StringVar(value=self.ini.values[key])
                 self.vars[key] = (var, kind, lo, hi, label)
                 if kind == "bool":
@@ -342,7 +398,7 @@ class App:
             for key, label, kind, lo, hi, hint in deferred:
                 row = ttk.Frame(self.body, padding=(22, 2))
                 row.pack(fill="x")
-                ttk.Label(row, text=label, width=22).pack(side="left")
+                ttk.Label(row, text=L(label), width=26).pack(side="left")
                 var = tk.StringVar(value=self.ini.values[key])
                 self.vars[key] = (var, kind, lo, hi, label)
                 ttk.Entry(row, textvariable=var, width=12).pack(side="left")
@@ -351,6 +407,11 @@ class App:
                           justify="left").pack(side="left", padx=6)
 
     # ---------- 动作 ----------
+    def toggle_lang(self):
+        LANG["cur"] = "en" if LANG["cur"] == "zh" else "zh"
+        self.build()
+        self.status.config(text="Language: %s (EN covers the UI, section titles and key labels; long notes stay Chinese)" % LANG["cur"] if LANG["cur"] == "en" else "语言：中文")
+
     def apply_preset(self, kv):
         hit = 0
         for k, v in kv.items():
