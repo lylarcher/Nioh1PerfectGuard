@@ -44,6 +44,7 @@ SCHEMA = [
     ("02 · 精防判定 / What counts", [
         ("RequireTimelyGuard", "要求「新按下」", "bool", 0, 1, "1 = 必须是新按下的防御（按住不算）；0 = 只要在窗口内格挡即可。"),
         ("GuardButtonMask", "防御键位掩码", "hex", 0, 0xFFFFFFFF, "手柄按键位。0x0100 = L1；0x0200 = R1 等。改错会导致识别不到防御。"),
+        ("ParryButtonMask", "精防触发键（可选）", "hex", 0, 0xFFFF, "0 = 沿用防御键。0x8000 = Y（石火式弹反）、0x2000 = B（化解式）。只开精防判定窗，不取消动作，可与武技同键。"),
         ("PadSlot", "手柄槽位", "int", 0, 3, "0 = 第一个手柄。"),
         ("GuardKeyVK", "键鼠防御键 (VK)", "int", 0, 255, "0 = 不用键鼠。例如 0x02 = 鼠标右键、0x10 = Shift。"),
         ("LearnButtons", "按键学习", "bool", 0, 1, "打开后日志会打印按下的按键码，方便查掩码。"),
@@ -107,6 +108,19 @@ BANNER = re.compile(r"^\s*;\s*[─\-=#*]{2,}\s*(.+?)\s*[─\-=#*]{2,}\s*$")
 LINE = re.compile(r"^(\s*)([A-Za-z][A-Za-z0-9_]*)(\s*=\s*)(.*?)(\s*)$")
 
 
+# 【高级】键默认折叠，避免新手误改（它们会直接影响识别与字段定位）
+ADVANCED = {"LivingWeaponGaugeOffset", "LivingWeaponGaugeMax", "DiagDisable",
+            "KiTrace", "LearnButtons", "BlockEventSource"}
+
+# 预设：一键写入常用组合（只改内存中的值，仍需点"保存"才落盘）
+PRESETS = [
+    ("石火式：Y 精防 (Ronin style)", {"GuardButtonMask": "0x0100", "ParryButtonMask": "0x8000"}),
+    ("化解式：B 精防 (Wo Long style)", {"GuardButtonMask": "0x0100", "ParryButtonMask": "0x2000"}),
+    ("经典：L1 精防", {"GuardButtonMask": "0x0100", "ParryButtonMask": "0"}),
+    ("手感推荐", {"WindowMs": "600", "DamageCutPercent": "50", "DamageCutMs": "10000",
+                  "LivingWeaponGaugePercent": "10", "LivingWeaponExtendPercent": "35",
+                  "ArmorBuff": "0"}),
+]
 class IniFile:
     """逐行保存的 INI：只替换值，其他一切都原样留下。"""
 
@@ -236,6 +250,12 @@ class App:
         ttk.Button(bar, text="打开文件夹", command=self.open_folder).pack(side="right", padx=6)
         ttk.Button(bar, text="重新载入", command=self.reload).pack(side="right")
 
+        pre = ttk.Frame(root, padding=(10, 0, 10, 6))
+        pre.pack(fill="x")
+        ttk.Label(pre, text="预设 / Presets:").pack(side="left")
+        for name, kv in PRESETS:
+            ttk.Button(pre, text=name, command=lambda kv=kv: self.apply_preset(kv)).pack(side="left", padx=4)
+
         outer = ttk.Frame(root)
         outer.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(outer, highlightthickness=0)
@@ -266,6 +286,7 @@ class App:
         for w in self.body.winfo_children():
             w.destroy()
         self.vars.clear()
+        deferred = []
         groups = {}
         order = []
         for title, keys in SCHEMA:
@@ -284,6 +305,9 @@ class App:
                       padding=(12, 12, 8, 4)).pack(anchor="w")
             for key, label, kind, lo, hi, hint in groups[title]:
                 if key not in self.ini.values:
+                    continue
+                if key in ADVANCED:
+                    deferred.append((key, label, kind, lo, hi, hint))
                     continue
                 row = ttk.Frame(self.body, padding=(22, 2))
                 row.pack(fill="x")
@@ -305,7 +329,28 @@ class App:
                 ttk.Label(row, text=hint, foreground="#666", wraplength=520,
                           justify="left").pack(side="left", padx=6)
 
+        if deferred:
+            ttk.Label(self.body, text="高级 / Advanced（改动前请先读说明）",
+                      font=("Segoe UI", 10, "bold"), padding=(12, 16, 8, 4)).pack(anchor="w")
+            for key, label, kind, lo, hi, hint in deferred:
+                row = ttk.Frame(self.body, padding=(22, 2))
+                row.pack(fill="x")
+                ttk.Label(row, text=label, width=22).pack(side="left")
+                var = tk.StringVar(value=self.ini.values[key])
+                self.vars[key] = (var, kind, lo, hi, label)
+                ttk.Entry(row, textvariable=var, width=12).pack(side="left")
+                ttk.Label(row, text=key, foreground="#999").pack(side="left", padx=8)
+                ttk.Label(row, text=hint, foreground="#666", wraplength=520,
+                          justify="left").pack(side="left", padx=6)
+
     # ---------- 动作 ----------
+    def apply_preset(self, kv):
+        hit = 0
+        for k, v in kv.items():
+            if k in self.vars:
+                self.vars[k][0].set(v)
+                hit += 1
+        self.status.config(text="已套用预设 %d 项，请点「保存」写入文件。" % hit)
     def reload(self):
         try:
             self.ini = IniFile(self.path)
