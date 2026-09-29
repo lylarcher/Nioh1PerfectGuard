@@ -1907,6 +1907,8 @@ static volatile LONG g_lw_wrote = 0;
 static float g_lw_wrote_val = -1.0f;
 static float g_lw_wrote_max = -1.0f;
 static volatile LONG g_lw_back = 0;
+static volatile LONG g_lw_verify_off = 0;   // offset the write went to
+static volatile LONG g_lw_verify_int = 0;   // 1 = int counter, 0 = float
 static float g_lw_back_val = -1.0f;
 
 // 1 = the engine's flag byte says the 99 state is active, 0 = it says it is not,
@@ -1969,7 +1971,14 @@ static void lw_refresh_state(void) {
             void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
             void *pa = pl ? *(void **)((char *)pl + 0x240) : NULL;
             if (pa) {
-                g_lw_back_val = *(float *)((char *)pa + 0x48);
+                int voff = (int)InterlockedCompareExchange(&g_lw_verify_off, 0, 0);
+                if (voff > 0 && InterlockedCompareExchange(&g_lw_verify_int, 0, 0)) {
+                    int iv = 0;
+                    ReadProcessMemory(GetCurrentProcess(), (char *)pa + voff, &iv, 4, NULL);
+                    g_lw_back_val = (float)iv;
+                } else if (voff > 0) {
+                    g_lw_back_val = *(float *)((char *)pa + voff);
+                }
                 InterlockedExchange(&g_lw_back, 1);
             }
         }
@@ -2022,7 +2031,9 @@ static void lw_diag(void) {
     int iC0 = 0, iC8 = 0;
     ReadProcessMemory(self, (char *)param + PG_LW_INT_OFF, &iC0, 4, &got);
     ReadProcessMemory(self, (char *)param + PG_LW_INT_MAX_OFF, &iC8, 4, &got);
-    log_line("LWD iC0=%d iC8=%d param40=%.5g param44=%.5g param48=%.5g param4c=%.5g p15c=%.5g "
+    float p100 = -1.0f;
+    ReadProcessMemory(self, (char *)param + 0x100, &p100, 4, &got);
+    log_line("LWD iC0=%d iC8=%d p100=%.5g param40=%.5g param44=%.5g param48=%.5g param4c=%.5g p15c=%.5g "
              "c15c=%.5g flag=%ld c22=%d n20=%d",
              p40, p44, p48, p4c, p15c, c15c,
              (long)InterlockedCompareExchange(&g_lw_seen_flag, 0, 0), c22, n20);
@@ -2158,6 +2169,8 @@ static void lw_plan_on_guard(void) {
             *(float *)((char *)param + PG_LW_BURN_OFF) = nv;
             InterlockedExchange(&g_lw_wrote, 1);
             g_lw_wrote_val = nv; g_lw_wrote_max = PG_LW_BURN_MAX; g_lw_back = 0;
+            InterlockedExchange(&g_lw_verify_off, PG_LW_BURN_OFF);
+            InterlockedExchange(&g_lw_verify_int, 0);
         }
         if (g_lw_log < 30) {
             log_line("LW burn: +%ld%% %g -> %g (max %g, in 99 state=1)", pct, burn, nv,
@@ -2184,6 +2197,10 @@ static void lw_plan_on_guard(void) {
     if (nv > mx) nv = mx;
     if (nv <= c) return;                               // already full
     *icur = nv;
+    g_lw_wrote_val = (float)nv; g_lw_wrote_max = (float)mx; g_lw_back = 0;
+    InterlockedExchange(&g_lw_verify_off, g_cfg.lw_gauge_offset);
+    InterlockedExchange(&g_lw_verify_int, 1);
+    InterlockedExchange(&g_lw_wrote, 1);
     if (g_lw_log < 30) {
         log_line("LW gauge: +%ld%% %d -> %d (max %d, in 99 state=%ld)", pct, c, nv, mx,
                  (long)in_lw);
