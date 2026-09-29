@@ -64,3 +64,10 @@ _work/*.log
 /_work/*_states.json
 /_work/*_ctors.json
 /_work/*.json
+
+# Python virtualenv for the config GUI
+/.venv/
+# GUI exe build output
+/tools/gui_dist/
+# PyInstaller scratch
+/_work/pyi/

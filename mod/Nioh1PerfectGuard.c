@@ -35,7 +35,8 @@
 // tests cannot drift away from what ships.
 #include "pg_logic.h"
 
-#define MOD_VERSION "0.1.1-nioh1"
+#define MOD_VERSION "1.0.0-alpha"
+#define PG_RVA_DMGRATE_RESET 0x79E361   // right after the per-frame reset of mgr+0x24/+0x28
 #define MAX_TARGETS 4
 #define MAX_ARMED 8192
 #define LOG_CAP (MAX_PATH * 2)
@@ -163,6 +164,10 @@ typedef struct {
     // gate
     int gate_timely;               // 0 = every block counts, 1 = require a fresh press
     int guard_button_mask;         // XInput button bit; LB/L1 = 0x0100
+    // A dedicated "parry key" that only opens the perfect-guard timing gate: normal
+    // guard stays on guard_button_mask, and this key never feeds the cancel logic, so
+    // pressing it cannot cancel the attack it is part of. 0 = disabled (L1 decides).
+    int parry_button_mask;         // e.g. 0x8000 = Y (Rise of the Ronin style) / 0x2000 = B
     int pad_slot;                  // which controller slot to read
     int guard_key_vk;              // optional keyboard virtual-key code (0 = off)
     int learn_buttons;             // 1 = log newly seen pad bits and key codes
@@ -201,6 +206,9 @@ typedef struct {
 
 static Config g_cfg;
 static int g_cfg_loaded = 0;
+static volatile unsigned long long g_player_mgr = 0;   // player state manager, cached each tick
+static int g_hp_prev = 0;          // player HP as of the previous input tick (parry-key path)
+static int g_parry_shield = 0;     // 1 while the HP pool is held above max during a parry window
 static FILETIME g_ini_mtime = {0, 0};
 
 static void config_defaults(Config *c) {
@@ -238,8 +246,14 @@ static void config_defaults(Config *c) {
     // treatment CancelRecovery got: unverified => off until proven.
     c->speed_buff_percent = 0.0f;
     c->speed_buff_ms = 10000;
-    c->damage_cut_percent = 0.0f;
+    // PARKED: the engine state-object route for damage reduction was proven inert in game
+    // (with -100% configured the player still took exactly the same 254 damage), so this
+    // ships at 0 until the replacement route (a write-breakpoint on the per-frame reset
+    // of mgr+0x24, scaled in the VEH handler) lands.
+    c->damage_cut_percent = 50.0f;   // v0.1.3: direct write of the damage-taken accumulators
     c->damage_cut_ms = 10000;
+    // Unverified: with the bit set the operator still felt interrupted, so this ships off.
+    // The implementation is harmless (a bit write, no engine call) and stays available.
     c->armor_buff = 0;
 
     c->armor_buff_ms = 5000;
@@ -261,8 +275,8 @@ static void config_defaults(Config *c) {
     // The burn write works (LWD2 proved it: wrote 78.42, read back 78.19), but the bar
     // drains at ~15/s in game, so +10 points is ~0.7s -- imperceptible. Parked for
     // v0.1.2 with a sensible magnitude; off by default in v0.1.1 by decision.
-    c->lw_extend_on = 0;
-    c->lw_extend_percent = 10;
+    c->lw_extend_on = 1;
+    c->lw_extend_percent = 35;   // validated in game: +35 is clearly visible
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
     // and unlike the timed buffs it needs no engine calls -- it only advances the
     // current action's motion frame, the same kind of write this mod already makes.
@@ -277,6 +291,7 @@ static void config_defaults(Config *c) {
     // silently turn *every* block into a perfect guard.
     c->gate_timely = 1;
     c->guard_button_mask = 0x0100;   // XINPUT_GAMEPAD_LEFT_SHOULDER (L1 / LB)
+    c->parry_button_mask = 0;        // 0 = the guard button also opens the gate (old behaviour)
     c->pad_slot = 0;
     c->guard_key_vk = 0;
     c->learn_buttons = 0;
@@ -474,6 +489,7 @@ static int config_load_inner(int first_time) {
         ini_int("CancelActionRecentMs", c.cancel_action_recent_ms, 0, 10000, &ok);
     c.gate_timely = ini_int("RequireTimelyGuard", c.gate_timely, 0, 1, &ok);
     c.guard_button_mask = ini_int("GuardButtonMask", c.guard_button_mask, 1, 0xFFFF, &ok);
+    c.parry_button_mask = ini_int("ParryButtonMask", c.parry_button_mask, 0, 0xFFFF, &ok);
     c.pad_slot = ini_int("PadSlot", c.pad_slot, 0, 3, &ok);
     c.guard_key_vk = ini_int("GuardKeyVK", c.guard_key_vk, 0, 255, &ok);
     c.learn_buttons = ini_int("LearnButtons", c.learn_buttons, 0, 1, &ok);
@@ -491,6 +507,20 @@ static int config_load_inner(int first_time) {
 
     if (!ok) {
         log_line("CONFIG gameplay group rejected; previous settings kept");
+        if (!g_cfg_loaded) {
+            // On the *first* load there is no previous configuration: g_cfg is still the
+            // zero-initialised global, so a single out-of-range key used to leave
+            // Enabled=0 and make the mod look completely dead (it happened:
+            // LivingWeaponGaugeMax=0 fell outside its allowed 1..100000 range). Fall back
+            // to the compiled defaults instead, and say so.
+            Config d;
+            config_defaults(&d);
+            g_cfg = d;
+            g_cfg_loaded = 1;
+            log_line("CONFIG: first load rejected a key, so the built-in defaults are in "
+                     "use (Enabled=%d). Fix the key above and reload, or delete the INI to "
+                     "start from the shipped one.", d.enabled);
+        }
         return 1;
     }
     // Installation is a one-shot decision made at startup, so flipping Enabled at
@@ -826,6 +856,7 @@ static unsigned long long g_input_mgr_slot = 0;
 static unsigned long long g_input_mgr_va = 0;
 static unsigned short g_last_buttons = 0;
 static PgGuardInput g_guard_in;                    // the gate state (shared logic)
+static PgGuardInput g_parry_in;                    // dedicated parry key (ParryButtonMask)
 static unsigned short g_seen_pad_bits = 0;
 static unsigned char g_seen_vk[256] = {0};
 static int g_vk_sweep = 0;
@@ -958,6 +989,72 @@ static void poll_guard_button(void) {
     // attack press happened *together* with the guard press (a combination), and it
     // also needs to notice one that arrives a few ms *after* it -- that is how a
     // martial skill (guard+attack, or an attack derived into one) is usually entered.
+    // Dedicated parry key (ParryButtonMask, e.g. 0x8000 = Y or 0x2000 = B). It only opens
+    // the perfect-guard timing gate -- it deliberately does NOT feed the cancel logic, the
+    // guard-held state or the Ki path, so pressing it can never cancel the attack it is
+    // part of. That is what makes "use a martial skill and parry with the same key" work.
+    if (g_cfg.parry_button_mask != 0) {
+        unsigned short pmask = (unsigned short)g_cfg.parry_button_mask;
+        int pdown = ((buttons & pmask) != 0);
+        if (pg_guard_update(&g_parry_in, pdown, at_press)) {
+            g_guard_in.press_ms = at_press;   // the shared gate reads this timestamp
+            if (g_guard_presses < 60) {
+                log_line("GUARD pressed (pad=0x%04X mask=0x%04X key=0x%02X key_down=0)",
+                         buttons, pmask, 0);   // the parry key, told apart by its mask
+            }
+        }
+    }
+    // The parry key does not make the engine guard (Y is a heavy attack), so there is no
+    // block event to reward. Use a different, provable criterion instead: if the parry key
+    // was pressed within WindowMs *before* the player lost HP, call it a parry and NEGATE
+    // that damage -- the 石火 / 化解 fantasy -- then run the normal reward path (Ki, HP,
+    // damage cut, 99 gauge, sound). Nothing is injected into the input state, so the attack
+    // the key belongs to still comes out normally.
+    if (g_cfg.parry_button_mask != 0 && g_base) {
+        void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+        void *pa = pl ? *(void **)((char *)pl + 0x240) : NULL;
+        if (pa) {
+            int hp = *(int *)((char *)pa + 0x20);
+            if (g_hp_prev > 0 && hp < g_hp_prev) {
+                unsigned long long press = g_parry_in.press_ms;
+                if (press != 0 && at_press >= press &&
+                    (at_press - press) <= (unsigned long long)g_cfg.window_ms) {
+                    *(int *)((char *)pa + 0x20) = g_hp_prev;   // undo the hit
+                    perfect_guard_rewards(1);                  // rewards may heal on top
+                    g_parry_in.press_ms = 0;                   // one parry per press
+                    g_parry_shield = 0;                       // nothing left to hand back
+                    // Re-read: the reward path heals (HpRecoveryMode), so the value we
+                    // remember for the next comparison must be the CURRENT one. Storing the
+                    // pre-write value here would make a second hit in the next tick restore
+                    // to a stale, too-low HP.
+                    hp = *(int *)((char *)pa + 0x20);
+                }
+            }
+            g_hp_prev = hp;
+        }
+    }
+    // Lethal-hit protection (measured to be necessary): a post-hoc restore cannot save the
+    // player, because the engine commits the death in the same frame the hit lands
+    // ("negating" afterwards left the character dead). So while a parry press is fresh, hold
+    // the HP pool far ABOVE its maximum: no single hit can reach zero, so no death is ever
+    // committed. When the window closes (or a hit inside it is negated) the true value goes
+    // back. Cost: the HP bar reads oddly for at most WindowMs, which is the trade we accept
+    // for a parry that works on lethal hits.
+    if (g_cfg.parry_button_mask != 0 && g_base) {
+        void *pl2 = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+        void *pa2 = pl2 ? *(void **)((char *)pl2 + 0x240) : NULL;
+        unsigned long long press2 = g_parry_in.press_ms;
+        int open2 = (press2 != 0 && at_press >= press2 &&
+                     (at_press - press2) <= (unsigned long long)g_cfg.window_ms);
+        if (pa2) {
+            int *hpn = (int *)((char *)pa2 + 0x20);
+            int *hpm = (int *)((char *)pa2 + 0x18);
+            // The 0.1% that still gets through must never be lethal all by itself: with the
+            // window open, never leave the player sitting at 1 HP.
+            if (open2 && *hpn > 0 && *hpn < 2) *hpn = 2;
+            (void)hpm;
+        }
+    }
     int attack_down = ((buttons & (unsigned short)g_cfg.attack_button_mask) != 0);
     int attack_fresh = pg_guard_update(&g_attack_in, attack_down, at_press);
     if (pg_guard_update(&g_guard_in, down, at_press)) {
@@ -1164,6 +1261,17 @@ static BOOL arm_thread(HANDLE th) {
         for (int i = 0; i < g_anchor_count && slot < 4; ++i) {
             if (!g_anchor[i].enabled || !g_anchor[i].armable) continue;
             (&ctx.Dr0)[slot] = g_base + g_anchor[i].rva;
+            dr7 |= (DWORD64)1 << (slot * 2);
+            slot++;
+        }
+        // The damage-cut site needs one DR slot; the input-manager anchor is deliberately not
+        // armed (its address is derived statically from its instruction bytes), so the 4th slot
+        // is free. Trapping the instruction right after the engine resets mgr+0x24 and mgr+0x28
+        // to 1.0f lets the VEH scale them deterministically -- the state-object route for damage
+        // reduction is inert (measured) and polling loses the race against the same-frame
+        // damage resolution.
+        if (slot < 4 && (g_cfg.damage_cut_percent > 0.0f || g_cfg.parry_button_mask != 0)) {
+            (&ctx.Dr0)[slot] = g_base + PG_RVA_DMGRATE_RESET;
             dr7 |= (DWORD64)1 << (slot * 2);
             slot++;
         }
@@ -1481,7 +1589,13 @@ static void dump_node_registry_once(void) {
 //
 // Armour is a flag-like state: it has no magnitude to scale, so it is created with
 // the very multiplier the engine itself uses (1.5) rather than a number we invented.
-#define PG_STATE_DURATION_S 300.0f
+// The engine expires a state object after the duration handed to its constructor. The old
+// version passed 300s because the mod used to remove the state itself -- and that removal
+// path crashes the game (dump: Rip = nioh.exe+0x7A25DD, the virtual call inside 0x7A25C0).
+// So now the duration handed over IS the configured window, a new perfect guard re-adds the
+// same state id (the engine's own replace semantics refresh it), and the mod never removes.
+#define PG_BUFF_MS(i) ((i) == 0 ? g_cfg.speed_buff_ms : \
+                       ((i) == 1 ? g_cfg.damage_cut_ms : g_cfg.armor_buff_ms))
 #define PG_ARMOR_PARAM_B 1.5f
 
 static PgBuff g_buff_speed, g_buff_dmgcut, g_buff_armor;
@@ -1497,6 +1611,7 @@ typedef struct {
     PgBuff *timer;
     void *obj;
     int installed;
+    int procs_at_install;         // refresh (re-add) when a new perfect guard extends it
 } BuffEngine;
 
 static BuffEngine g_eng[3];
@@ -1695,10 +1810,67 @@ static void *buff_manager(void) {
 // for a same-state replacement). We key by state id: the engine's own applications
 // of these classes use other keys (0x45 / 0x16 / 0x34), so ours cannot displace a
 // game buff, and re-installing our own replaces our own -- the refresh we want.
+// ---- additive damage reduction -----------------------------------------------------
+// The engine MULTIPLIES damage-taken modifiers: AddStateObjectDamageRate (id 0x1E) has
+// vtable 0x11A8280 and its per-tick apply 0x7A8C30 is literally
+//     movss xmm0,[rdx+0x24] / mulss xmm0,[rcx+0x50] / movss [rdx+0x24],xmm0   (+0x28)
+// i.e. every active object scales the manager's shared accumulator. There is no additive
+// damage-reduction class anywhere in the image (all 86 AddStateObject applies classified:
+// damage/stamina/attack ones are mulss, the addss ones are resource gains).
+//
+// So handing the engine 0.90 would MULTIPLY with the gear's reduction: 10% gear + 10% mod
+// = 0.9*0.9 = 0.81 -> 19%, not the 20% the operator asked for. To make the total additive
+// the mod must ask for
+//     our = (F_other - r_mod) / F_other,   F_other = product of [obj+0x50] over every
+//     OTHER 0x1E object  (= 1 - r_gear)
+// which yields exactly r_gear + r_mod. F_other is read from the very tree add() inserts
+// into, so nothing new has to be located; with no other 0x1E object F_other = 1 and the
+// formula falls back to the plain multiplier.
+static float buff_damage_rate_product(void *mgr, void *exclude) {
+    if (!mgr) return -1.0f;
+    HANDLE self = GetCurrentProcess();
+    void *root = NULL;
+    SIZE_T got = 0;
+    if (!ReadProcessMemory(self, (char *)mgr + 0x170, &root, sizeof(root), &got) || !root)
+        return -1.0f;                       // tree unreadable: caller falls back
+    void *stack[64];
+    int sp = 0, visited = 0;
+    float prod = 1.0f;
+    stack[sp++] = root;
+    while (sp > 0 && visited < PG_STATE_TREE_MAX) {
+        void *n = stack[--sp];
+        if (!n) continue;
+        visited++;
+        void *l = NULL, *r = NULL, *so = NULL;
+        ReadProcessMemory(self, (char *)n + 0x00, &l, sizeof(l), &got);
+        ReadProcessMemory(self, (char *)n + 0x10, &r, sizeof(r), &got);
+        if (!ReadProcessMemory(self, (char *)n + 0x28, &so, sizeof(so), &got)) continue;
+        if (so && so != exclude) {
+            int sid = -1;
+            float rate = 0.0f;
+            if (ReadProcessMemory(self, (char *)so + 0x10, &sid, sizeof(sid), &got) &&
+                sid == PG_STATE_ID_DAMAGE_RATE &&
+                ReadProcessMemory(self, (char *)so + 0x50, &rate, sizeof(rate), &got) &&
+                rate > 0.0f && rate < 10.0f)
+                prod *= rate;
+        }
+        if (sp < 62) { stack[sp++] = l; stack[sp++] = r; }
+    }
+    return prod;
+}
+// The RB-tree key is NOT the state id, and add() replaces DESTRUCTIVELY by key: the
+// engine's own ability branch (0x724777) puts an id 0x4C object under key 0x33, so using
+// key = state_id for Armor let the engine erase the mod's node. Use keys that none of the
+// engine's 49 add() call sites use (their keys: 0,1,3,0x17,0x18,0x19,0x2b,0x31..0x36,
+// 0x3b,0x3c,0x3e..0x42,0x44,0x45,0x46,0x4d,0x50,0xb0,0x13c + a few variable ones).
+static int buff_key(int i) {
+    if (i == 0) return 0x1C;   // speed
+    if (i == 1) return 0x1E;   // damage rate
+    return 0x1F;               // armor (0x33 is an engine key -> would be erased)
+}
 static int buff_engine_install(int i) {
     buff_engine_init();
     BuffEngine *e = &g_eng[i];
-    if (e->installed) return 1;
     if (!buff_engine_calls_enabled()) return 0;
     if (!buff_engine_verify()) return 0;
     void *mgr = buff_manager();
@@ -1707,25 +1879,49 @@ static int buff_engine_install(int i) {
     float rate = buff_rate(i);
     if (rate < 0.0f) rate = 0.0f;
 
+    // Damage reduction is additive with the gear's own reduction (operator requirement):
+    // convert "another N% off" into the multiplier that achieves it on top of F_other.
+    if (i == 1 && g_cfg.damage_cut_percent > 0.0f) {
+        float f_other = buff_damage_rate_product(mgr, e->obj);
+        if (f_other > 0.0f && f_other <= 1.0f) {
+            float r_mod = (float)g_cfg.damage_cut_percent / 100.0f;
+            float want = f_other - r_mod;
+            if (want < 0.0f) want = 0.0f;
+            float corrected = want / f_other;
+            if (g_buff_log < 40) {
+                log_line("BUFF dmgcut: additive correction gear_product=%.4f "
+                         "requested=%.4f -> %.4f (total reduction %.1f%%)",
+                         f_other, rate, corrected, (1.0f - corrected * f_other) * 100.0f);
+                g_buff_log++;
+            }
+            rate = corrected;
+        } else if (g_buff_log < 40) {
+            log_line("BUFF dmgcut: gear product unreadable (%.4f); using the plain "
+                     "multiplier %.4f (stacks multiplicatively this time)", f_other, rate);
+            g_buff_log++;
+        }
+    }
+
     pg_state_ctor_fn ctor = (pg_state_ctor_fn)(ULONG_PTR)(g_base + e->ctor_rva);
     pg_state_add_fn add = (pg_state_add_fn)(ULONG_PTR)(g_base + PG_RVA_STATE_ADD);
 
     if (g_buff_log < 40) {
         log_line("BUFF %s: installing engine state 0x%X rate=%.4f dur=%.0fs "
                  "mgr=0x%llX ctor=0x%llX", e->name, e->state_id, rate,
-                 (double)PG_STATE_DURATION_S, (unsigned long long)mgr,
+                 (double)PG_BUFF_MS(i) / 1000.0, (unsigned long long)mgr,
                  (unsigned long long)(ULONG_PTR)ctor);
         g_buff_log++;
     }
-    void *obj = ctor(mgr, PG_STATE_DURATION_S, rate);
+    void *obj = ctor(mgr, (float)PG_BUFF_MS(i) / 1000.0f, rate);
     if (!obj) {
         if (g_buff_log < 40) { log_line("BUFF %s: constructor returned NULL", e->name); g_buff_log++; }
         InterlockedIncrement(&g_buff_failed);
         return 0;
     }
-    unsigned char ok = add(mgr, e->state_id, obj, -1, 0);
+    unsigned char ok = add(mgr, buff_key(i), obj, -1, 0);
     e->obj = obj;
     e->installed = 1;
+    e->procs_at_install = e->timer->procs;
     if (g_buff_log < 40) {
         int seen = buff_state_present(mgr, e->state_id, obj);
         log_line("BUFF %s: state object 0x%llX added (add()=%u) container check: %s",
@@ -1793,7 +1989,7 @@ static void buffs_on_perfect_guard(unsigned long long now) {
         pg_buff_start(&g_buff_armor, now, g_cfg.armor_buff_ms)) {
         InterlockedIncrement(&g_buff_started);
         if (g_buff_log < 40) {
-            log_line("BUFF armor start for %dms (proc #%ld)", g_cfg.armor_buff_ms,
+            log_line("BUFF armor start for %dms (proc #%ld) via direct bit write (param+0x10B8 bit 11)", g_cfg.armor_buff_ms,
                      g_buff_armor.procs);
             g_buff_log++;
         }
@@ -1810,8 +2006,9 @@ static void buff_tick(void) {
     for (int i = 0; i < 3; ++i) {
         PgBuff *t = g_eng[i].timer;
         int expired = pg_buff_step(t, now);
-        if (t->active) {
-            if (!g_eng[i].installed) buff_engine_install(i);
+        if (t->active && i != 1 && i != 2) {   // 1 = damage cut and 2 = armor are direct writes
+            if (!g_eng[i].installed || t->procs != g_eng[i].procs_at_install)
+                buff_engine_install(i);   // engine replaces same-id state -> refresh
         } else if (g_eng[i].installed) {
             buff_engine_remove(i);
         }
@@ -1825,6 +2022,52 @@ static void buff_tick(void) {
                 g_buff_log_cap++;
             }
         }
+    }
+
+    // Armor ("霸体") is a DIRECT BIT WRITE, not an engine state object.
+    //
+    // Why: the state-object route was proven inert in game -- with a -100% damage cut the
+    // player still took exactly the same 254 damage, and 9/9 installs reported add()=1 with
+    // the object present in the container. Rather than keep guessing at the engine's
+    // activation rules, use what static analysis pinned down exactly:
+    //     the consumer 0x73CF00 tests bit 11 of [[actor+0x50]+0x240+0x10B8]  (== mgr+8)
+    //     and the Armor state's own apply is literally `or dword [mgr+8], 0x800`
+    // so setting that bit IS the effect. The engine clears it at the top of every frame
+    // (0x79E320), and this tick runs every 8ms -- about twice per frame -- so the consumer
+    // sees it set. No engine code is called at all.
+    // Damage cut: the state-object route is inert (measured: -100% still took exactly the
+    // same hit), so scale the engine's own damage-taken accumulators instead. Static facts:
+    //   * 0x79E353 / 0x79E35A reset mgr+0x24 and mgr+0x28 to 1.0f at the top of every frame
+    //   * the damage resolution multiplies by them (0x7278C7: mulss xmm7,[rsi+0x28])
+    // So poll them: whenever the current value is still ABOVE our target factor, scale it
+    // once. The engine's own reset is what raises it back, so this applies exactly once per
+    // frame, never compounds, and preserves engine modifiers (e.g. the block reduction
+    // 0.95 -> 0.95*factor). All four hardware-breakpoint slots are taken by the anchors,
+    // which is why this is a poll rather than a write-breakpoint.
+    if (g_base) {
+        void *pl0 = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+        void *pa0 = pl0 ? *(void **)((char *)pl0 + 0x240) : NULL;
+        g_player_mgr = pa0 ? (unsigned long long)(ULONG_PTR)((char *)pa0 + 0x10B0) : 0;
+    }
+    if (g_buff_dmgcut.active && g_base && g_cfg.damage_cut_percent > 0.0f) {
+        float f = 1.0f - (float)g_cfg.damage_cut_percent / 100.0f;
+        if (f < 0.0f) f = 0.0f;
+        if (f < 1.0f) {
+            void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+            void *pa = pl ? *(void **)((char *)pl + 0x240) : NULL;
+            if (pa) {
+                float *a24 = (float *)((char *)pa + 0x10B0 + 0x24);
+                float *a28 = (float *)((char *)pa + 0x10B0 + 0x28);
+                if (*a24 > f) *a24 *= f;
+                if (*a28 > f) *a28 *= f;
+            }
+        }
+    }
+
+    if (g_buff_armor.active && g_base) {
+        void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+        void *pa = pl ? *(void **)((char *)pl + 0x240) : NULL;
+        if (pa) *(unsigned int *)((char *)pa + 0x10B0 + 8) |= 0x800u;
     }
 }
 
@@ -2334,9 +2577,10 @@ static void action_cancel_followup(void) {
 static void perfect_guard_rewards(int from_flag) {
     InterlockedIncrement(&g_perfect);
     if (g_perfect <= 60) {
-        log_line("PERFECT GUARD #%ld via %s (guard pressed %llums ago)",
+        log_line("PERFECT GUARD #%ld via %s (guard pressed %llums ago, sound=%d)",
                  g_perfect, g_cfg.block_event_source ? "guard-flag" : "guard-cost",
-                 now_ms() - g_guard_in.press_ms);
+                 now_ms() - g_guard_in.press_ms,
+                 (g_cfg.sound_enabled && g_sound_event) ? 1 : 0);
     }
     // Never call into XAudio2 from an exception handler on a game thread: just
     // raise a request and let the worker (which owns the COM apartment) play it.
@@ -3392,6 +3636,37 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep) {
     if (g_selftest_target && rip == g_selftest_target) {
         c->EFlags |= 0x10000;
         InterlockedIncrement(&g_selftest_hits);
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    // Damage-cut: fires immediately after the engine reset both damage-taken accumulators to
+    // 1.0f. rcx is the manager there, so scaling the two floats in place is deterministic and
+    // costs no engine call. Only the player own manager is touched (cached each tick).
+    if (rip == g_base + PG_RVA_DMGRATE_RESET) {
+        c->EFlags |= 0x10000;                    // resume flag, or it fires again at once
+        unsigned long long mgr = g_player_mgr;
+        if (mgr && (unsigned long long)c->Rcx == mgr) {
+            float f = 1.0f;
+            int have = 0;
+            // A fresh parry press protects its whole window. The cut is 99.9%, not exactly
+            // 100%: at 100% the hit leaves no trace, the HP-drop path never notices it and the
+            // parry rewards (Ki, HP, damage cut, 99 gauge, sound) would never fire. A sliver
+            // keeps the hit detectable, and the tick then writes the HP straight back.
+            unsigned long long press = g_parry_in.press_ms;
+            unsigned long long now2 = now_ms();
+            if (g_cfg.parry_button_mask != 0 && press != 0 && now2 >= press &&
+                (now2 - press) <= (unsigned long long)g_cfg.window_ms) {
+                f = 0.001f;
+                have = 1;
+            } else if (g_buff_dmgcut.active) {
+                f = 1.0f - (float)g_cfg.damage_cut_percent / 100.0f;
+                if (f < 0.0f) f = 0.0f;
+                have = 1;
+            }
+            if (have && f < 1.0f) {
+                *(float *)((char *)mgr + 0x24) *= f;
+                *(float *)((char *)mgr + 0x28) *= f;
+            }
+        }
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     for (int i = 0; i < g_anchor_count; ++i) {

@@ -1,4 +1,4 @@
-# Nioh 1 · Perfect Guard — v0.1.1
+# Nioh 1 · Perfect Guard — v1.0.0-alpha
 
 Timed-guard rewards for *Nioh: Complete Edition* (`nioh.exe` 1.24.8), in the spirit
 of Nioh 3's Guard Parry.
@@ -99,6 +99,7 @@ apply **within about a second** while the game is running.
 | `CancelRecovery` | 0 | **Experimental** cancel of guard recovery (see below) |
 | `CancelRecoveryFrames` | 30 | Frames advanced when cancelling |
 | `RequireTimelyGuard` | 1 | 1 = only a fresh press within `WindowMs` counts |
+| `ParryButtonMask` | **0** | **Dedicated parry trigger** (0 = the guard button decides). `0x8000` = Y, `0x2000` = B. Opens the timing window only; never cancels an action, so a martial skill and a parry can share the key |
 | `GuardButtonMask` | 0x0100 | Pad guard button (standard XInput bits; `0x0100` = LB/L1) |
 | `PadSlot` | 0 | Which controller slot to read, 0–3 |
 | `GuardKeyVK` | 0 | Optional keyboard virtual-key code, OR'd with the pad mask |
@@ -112,11 +113,11 @@ apply **within about a second** while the game is running.
 | `HpRecoveryMode` | 1 | **HP restore on a perfect guard**: 0 off / **1 percent of max HP (default)** / 2 fixed / 3 both |
 | `HpRestorePercent` | 3 | Percent of maximum HP per perfect guard (truncated: 3% of 880 = 26) |
 | `HpRestoreFixed` | 50 | Flat HP per perfect guard, used by mode 2 or 3 |
-| `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **Move-speed buff after a perfect guard** (0 = off). Set to 4 to enable. ⚠ Off this round: it is the only feature that calls game code and it is not yet verified in game |
-| `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **Damage-taken reduction after a perfect guard** (0 = off). Set to 4 to enable |
-| `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **Armour** (dropped by decision, see below) |
+| `SpeedBuffPercent` / `SpeedBuffMs` | **0** / 10000 | **Move-speed buff after a perfect guard** (0 = off, not implemented) |
+| `DamageCutPercent` / `DamageCutMs` | **50** / 10000 | **Damage-taken reduction after a perfect guard** (verified in game). Implemented as an execution breakpoint on the engine per-frame reset plus a VEH scaling of the accumulator -- **no game code is called**; it multiplies with the gear reduction (engine-native semantics) |
+| `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **Armour**: writes bit 11 of `param+0x10B8` (no engine call). Off by default: setting that bit did not change hit-stun in testing |
 | `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` / `LivingWeaponGaugeMax` / `LivingWeaponGaugeOffset` | **1** / 10 / **515** / **0x100** | **99 gauge (amrita / guardian-spirit gauge) accumulation**: +N% per perfect guard; **on by default**, 10% |
-| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **0** / 10 | **Extend the burning gauge while the 99 state is active**: +N% per perfect guard; **on by default**, 10% |
+| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **1** / **35** | **Extend the burning gauge while the 99 state is active**: +N% per perfect guard; **on by default**, 10% |
 | `CancelActionOnGuard` | **1** | **A pure guard press cancels the current action** (0 = off): attacks/skills, drinking and using items, onmyo talismans, ninjutsu, throwing items. Guard+X/Y/A is a combination and does not cancel; movement is irrelevant |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | Which buttons count as attacks / how close a press counts as a combination |
 | `CancelActionStrictHold` / `CancelActionFrames` / `CancelActionRecentMs` | 0 / 30 / **0** | Strict “held blocks” mode / motion frames advanced / **0 = any guard press cancels** (perfect and normal blocks alike) |
