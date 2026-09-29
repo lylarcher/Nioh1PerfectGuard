@@ -238,7 +238,11 @@ static void config_defaults(Config *c) {
     // treatment CancelRecovery got: unverified => off until proven.
     c->speed_buff_percent = 0.0f;
     c->speed_buff_ms = 10000;
-    c->damage_cut_percent = 10.0f;   // v0.1.3: 10% less damage taken while active
+    // PARKED: the engine state-object route for damage reduction was proven inert in game
+    // (with -100% configured the player still took exactly the same 254 damage), so this
+    // ships at 0 until the replacement route (a write-breakpoint on the per-frame reset
+    // of mgr+0x24, scaled in the VEH handler) lands.
+    c->damage_cut_percent = 0.0f;
     c->damage_cut_ms = 10000;
     c->armor_buff = 1;               // v0.1.3: no hit stun while active
 
@@ -1895,7 +1899,7 @@ static void buffs_on_perfect_guard(unsigned long long now) {
         pg_buff_start(&g_buff_armor, now, g_cfg.armor_buff_ms)) {
         InterlockedIncrement(&g_buff_started);
         if (g_buff_log < 40) {
-            log_line("BUFF armor start for %dms (proc #%ld)", g_cfg.armor_buff_ms,
+            log_line("BUFF armor start for %dms (proc #%ld) via direct bit write (param+0x10B8 bit 11)", g_cfg.armor_buff_ms,
                      g_buff_armor.procs);
             g_buff_log++;
         }
@@ -1912,7 +1916,7 @@ static void buff_tick(void) {
     for (int i = 0; i < 3; ++i) {
         PgBuff *t = g_eng[i].timer;
         int expired = pg_buff_step(t, now);
-        if (t->active) {
+        if (t->active && i != 2) {   // armor (i==2) uses a direct bit write, below
             if (!g_eng[i].installed || t->procs != g_eng[i].procs_at_install)
                 buff_engine_install(i);   // engine replaces same-id state -> refresh
         } else if (g_eng[i].installed) {
@@ -1928,6 +1932,23 @@ static void buff_tick(void) {
                 g_buff_log_cap++;
             }
         }
+    }
+
+    // Armor ("霸体") is a DIRECT BIT WRITE, not an engine state object.
+    //
+    // Why: the state-object route was proven inert in game -- with a -100% damage cut the
+    // player still took exactly the same 254 damage, and 9/9 installs reported add()=1 with
+    // the object present in the container. Rather than keep guessing at the engine's
+    // activation rules, use what static analysis pinned down exactly:
+    //     the consumer 0x73CF00 tests bit 11 of [[actor+0x50]+0x240+0x10B8]  (== mgr+8)
+    //     and the Armor state's own apply is literally `or dword [mgr+8], 0x800`
+    // so setting that bit IS the effect. The engine clears it at the top of every frame
+    // (0x79E320), and this tick runs every 8ms -- about twice per frame -- so the consumer
+    // sees it set. No engine code is called at all.
+    if (g_buff_armor.active && g_base) {
+        void *pl = *(void **)(ULONG_PTR)(g_base + 0x18A0490);
+        void *pa = pl ? *(void **)((char *)pl + 0x240) : NULL;
+        if (pa) *(unsigned int *)((char *)pa + 0x10B0 + 8) |= 0x800u;
     }
 }
 
