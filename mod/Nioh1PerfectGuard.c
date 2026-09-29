@@ -164,6 +164,10 @@ typedef struct {
     // gate
     int gate_timely;               // 0 = every block counts, 1 = require a fresh press
     int guard_button_mask;         // XInput button bit; LB/L1 = 0x0100
+    // A dedicated "parry key" that only opens the perfect-guard timing gate: normal
+    // guard stays on guard_button_mask, and this key never feeds the cancel logic, so
+    // pressing it cannot cancel the attack it is part of. 0 = disabled (L1 decides).
+    int parry_button_mask;         // e.g. 0x8000 = Y (Rise of the Ronin style) / 0x2000 = B
     int pad_slot;                  // which controller slot to read
     int guard_key_vk;              // optional keyboard virtual-key code (0 = off)
     int learn_buttons;             // 1 = log newly seen pad bits and key codes
@@ -285,6 +289,7 @@ static void config_defaults(Config *c) {
     // silently turn *every* block into a perfect guard.
     c->gate_timely = 1;
     c->guard_button_mask = 0x0100;   // XINPUT_GAMEPAD_LEFT_SHOULDER (L1 / LB)
+    c->parry_button_mask = 0;        // 0 = the guard button also opens the gate (old behaviour)
     c->pad_slot = 0;
     c->guard_key_vk = 0;
     c->learn_buttons = 0;
@@ -482,6 +487,7 @@ static int config_load_inner(int first_time) {
         ini_int("CancelActionRecentMs", c.cancel_action_recent_ms, 0, 10000, &ok);
     c.gate_timely = ini_int("RequireTimelyGuard", c.gate_timely, 0, 1, &ok);
     c.guard_button_mask = ini_int("GuardButtonMask", c.guard_button_mask, 1, 0xFFFF, &ok);
+    c.parry_button_mask = ini_int("ParryButtonMask", c.parry_button_mask, 0, 0xFFFF, &ok);
     c.pad_slot = ini_int("PadSlot", c.pad_slot, 0, 3, &ok);
     c.guard_key_vk = ini_int("GuardKeyVK", c.guard_key_vk, 0, 255, &ok);
     c.learn_buttons = ini_int("LearnButtons", c.learn_buttons, 0, 1, &ok);
@@ -848,6 +854,7 @@ static unsigned long long g_input_mgr_slot = 0;
 static unsigned long long g_input_mgr_va = 0;
 static unsigned short g_last_buttons = 0;
 static PgGuardInput g_guard_in;                    // the gate state (shared logic)
+static PgGuardInput g_parry_in;                    // dedicated parry key (ParryButtonMask)
 static unsigned short g_seen_pad_bits = 0;
 static unsigned char g_seen_vk[256] = {0};
 static int g_vk_sweep = 0;
@@ -980,6 +987,17 @@ static void poll_guard_button(void) {
     // attack press happened *together* with the guard press (a combination), and it
     // also needs to notice one that arrives a few ms *after* it -- that is how a
     // martial skill (guard+attack, or an attack derived into one) is usually entered.
+    // Dedicated parry key (ParryButtonMask, e.g. 0x8000 = Y or 0x2000 = B). It only opens
+    // the perfect-guard timing gate -- it deliberately does NOT feed the cancel logic, the
+    // guard-held state or the Ki path, so pressing it can never cancel the attack it is
+    // part of. That is what makes "use a martial skill and parry with the same key" work.
+    if (g_cfg.parry_button_mask != 0) {
+        unsigned short pmask = (unsigned short)g_cfg.parry_button_mask;
+        int pdown = ((buttons & pmask) != 0);
+        if (pg_guard_update(&g_parry_in, pdown, at_press)) {
+            g_guard_in.press_ms = at_press;   // the shared gate reads this timestamp
+        }
+    }
     int attack_down = ((buttons & (unsigned short)g_cfg.attack_button_mask) != 0);
     int attack_fresh = pg_guard_update(&g_attack_in, attack_down, at_press);
     if (pg_guard_update(&g_guard_in, down, at_press)) {

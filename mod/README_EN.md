@@ -99,6 +99,7 @@ apply **within about a second** while the game is running.
 | `CancelRecovery` | 0 | **Experimental** cancel of guard recovery (see below) |
 | `CancelRecoveryFrames` | 30 | Frames advanced when cancelling |
 | `RequireTimelyGuard` | 1 | 1 = only a fresh press within `WindowMs` counts |
+| `ParryButtonMask` | **0** | **Dedicated parry trigger** (0 = the guard button decides). `0x8000` = Y, `0x2000` = B. Opens the timing window only; never cancels an action, so a martial skill and a parry can share the key |
 | `GuardButtonMask` | 0x0100 | Pad guard button (standard XInput bits; `0x0100` = LB/L1) |
 | `PadSlot` | 0 | Which controller slot to read, 0–3 |
 | `GuardKeyVK` | 0 | Optional keyboard virtual-key code, OR'd with the pad mask |

@@ -93,6 +93,7 @@ INI 内每一项都有中英双语注释、取值范围和默认值。大多数�
 | `CancelRecovery` | 0 | 精防后提前接续（**实验性，默认关**，见下） |
 | `CancelRecoveryFrames` | 30 | 接续时推进的动画帧数 |
 | `RequireTimelyGuard` | 1 | 1 = 仅 WindowMs 内新按下防御的格挡算精防；0 = 每次格挡都算 |
+| `ParryButtonMask` | **0** | **精防触发键**（0 = 沿用防御键）。`0x8000` = Y（石火式弹反）、`0x2000` = B（化解式）。只开判定窗，不取消动作，可与武技同键 |
 | `GuardButtonMask` | 0x0100 | 手柄防御键位掩码（标准 XInput 位）。`0x0100` = LB/L1 |
 | `PadSlot` | 0 | 读取哪个手柄槽位 0～3 |
 | `GuardKeyVK` | 0 | 键盘防御键的虚拟键码，0 = 不启用。与手柄掩码是"或"关系 |
