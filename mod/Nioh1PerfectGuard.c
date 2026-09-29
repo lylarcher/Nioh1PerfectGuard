@@ -2173,7 +2173,7 @@ static void lw_plan_on_guard(void) {
     float add = (float)pct / 100.0f * m;
     float nv = c - add;
     if (nv < 0.0f) nv = 0.0f;
-    if (nv > c) {
+    if (nv < c) {                       // only ever *fills* (decreases the deficit)
         *cur = nv;
         g_lw_wrote_val = nv;
         g_lw_wrote_max = m;
