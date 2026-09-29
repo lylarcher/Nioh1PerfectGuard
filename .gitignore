@@ -69,3 +69,5 @@ _work/*.log
 /.venv/
 # GUI exe build output
 /tools/gui_dist/
+# PyInstaller scratch
+/_work/pyi/

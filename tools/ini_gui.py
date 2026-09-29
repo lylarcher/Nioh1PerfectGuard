@@ -212,10 +212,17 @@ def find_ini(explicit=None):
             return last
     except Exception:
         pass
-    here = os.path.dirname(os.path.abspath(__file__))
+    # When frozen (PyInstaller) __file__ points inside a temp extraction dir, so search
+    # relative to the exe itself instead.
+    if getattr(sys, "frozen", False):
+        here = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        here = os.path.dirname(os.path.abspath(__file__))
     for c in (here,
               os.path.join(here, "..", "mods", "Nioh1PerfectGuard"),
               os.path.join(here, ".."),
+              os.path.join(here, "..", "..", "mod"),
+              os.path.join(here, "..", ".."),
               os.path.join(here, "..", "mod")):
         p = os.path.abspath(os.path.join(c, INI_NAME))
         if os.path.isfile(p):
