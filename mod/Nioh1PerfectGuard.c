@@ -1019,8 +1019,13 @@ static void poll_guard_button(void) {
                 if (press != 0 && at_press >= press &&
                     (at_press - press) <= (unsigned long long)g_cfg.window_ms) {
                     *(int *)((char *)pa + 0x20) = g_hp_prev;   // undo the hit
-                    perfect_guard_rewards(1);
+                    perfect_guard_rewards(1);                  // rewards may heal on top
                     g_parry_in.press_ms = 0;                   // one parry per press
+                    // Re-read: the reward path heals (HpRecoveryMode), so the value we
+                    // remember for the next comparison must be the CURRENT one. Storing the
+                    // pre-write value here would make a second hit in the next tick restore
+                    // to a stale, too-low HP.
+                    hp = *(int *)((char *)pa + 0x20);
                 }
             }
             g_hp_prev = hp;
