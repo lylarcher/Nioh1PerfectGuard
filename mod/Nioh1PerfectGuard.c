@@ -238,9 +238,9 @@ static void config_defaults(Config *c) {
     // treatment CancelRecovery got: unverified => off until proven.
     c->speed_buff_percent = 0.0f;
     c->speed_buff_ms = 10000;
-    c->damage_cut_percent = 0.0f;
+    c->damage_cut_percent = 10.0f;   // v0.1.3: 10% less damage taken while active
     c->damage_cut_ms = 10000;
-    c->armor_buff = 0;
+    c->armor_buff = 1;               // v0.1.3: no hit stun while active
 
     c->armor_buff_ms = 5000;
     // The 99 gauge: ON by default, 10% per perfect guard in each phase. This is now a
@@ -1495,7 +1495,13 @@ static void dump_node_registry_once(void) {
 //
 // Armour is a flag-like state: it has no magnitude to scale, so it is created with
 // the very multiplier the engine itself uses (1.5) rather than a number we invented.
-#define PG_STATE_DURATION_S 300.0f
+// The engine expires a state object after the duration handed to its constructor. The old
+// version passed 300s because the mod used to remove the state itself -- and that removal
+// path crashes the game (dump: Rip = nioh.exe+0x7A25DD, the virtual call inside 0x7A25C0).
+// So now the duration handed over IS the configured window, a new perfect guard re-adds the
+// same state id (the engine's own replace semantics refresh it), and the mod never removes.
+#define PG_BUFF_MS(i) ((i) == 0 ? g_cfg.speed_buff_ms : \
+                       ((i) == 1 ? g_cfg.damage_cut_ms : g_cfg.armor_buff_ms))
 #define PG_ARMOR_PARAM_B 1.5f
 
 static PgBuff g_buff_speed, g_buff_dmgcut, g_buff_armor;
@@ -1511,6 +1517,7 @@ typedef struct {
     PgBuff *timer;
     void *obj;
     int installed;
+    int procs_at_install;         // refresh (re-add) when a new perfect guard extends it
 } BuffEngine;
 
 static BuffEngine g_eng[3];
@@ -1712,7 +1719,6 @@ static void *buff_manager(void) {
 static int buff_engine_install(int i) {
     buff_engine_init();
     BuffEngine *e = &g_eng[i];
-    if (e->installed) return 1;
     if (!buff_engine_calls_enabled()) return 0;
     if (!buff_engine_verify()) return 0;
     void *mgr = buff_manager();
@@ -1727,11 +1733,11 @@ static int buff_engine_install(int i) {
     if (g_buff_log < 40) {
         log_line("BUFF %s: installing engine state 0x%X rate=%.4f dur=%.0fs "
                  "mgr=0x%llX ctor=0x%llX", e->name, e->state_id, rate,
-                 (double)PG_STATE_DURATION_S, (unsigned long long)mgr,
+                 (double)PG_BUFF_MS(i) / 1000.0, (unsigned long long)mgr,
                  (unsigned long long)(ULONG_PTR)ctor);
         g_buff_log++;
     }
-    void *obj = ctor(mgr, PG_STATE_DURATION_S, rate);
+    void *obj = ctor(mgr, (float)PG_BUFF_MS(i) / 1000.0f, rate);
     if (!obj) {
         if (g_buff_log < 40) { log_line("BUFF %s: constructor returned NULL", e->name); g_buff_log++; }
         InterlockedIncrement(&g_buff_failed);
@@ -1740,6 +1746,7 @@ static int buff_engine_install(int i) {
     unsigned char ok = add(mgr, e->state_id, obj, -1, 0);
     e->obj = obj;
     e->installed = 1;
+    e->procs_at_install = e->timer->procs;
     if (g_buff_log < 40) {
         int seen = buff_state_present(mgr, e->state_id, obj);
         log_line("BUFF %s: state object 0x%llX added (add()=%u) container check: %s",
@@ -1825,7 +1832,8 @@ static void buff_tick(void) {
         PgBuff *t = g_eng[i].timer;
         int expired = pg_buff_step(t, now);
         if (t->active) {
-            if (!g_eng[i].installed) buff_engine_install(i);
+            if (!g_eng[i].installed || t->procs != g_eng[i].procs_at_install)
+                buff_engine_install(i);   // engine replaces same-id state -> refresh
         } else if (g_eng[i].installed) {
             buff_engine_remove(i);
         }
