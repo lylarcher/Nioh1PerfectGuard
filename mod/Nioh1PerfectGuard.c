@@ -1049,22 +1049,10 @@ static void poll_guard_button(void) {
         if (pa2) {
             int *hpn = (int *)((char *)pa2 + 0x20);
             int *hpm = (int *)((char *)pa2 + 0x18);
-            if (open2 && g_hp_prev > 0) {
-                int mx = *hpm;
-                if (mx < 1) mx = 1;
-                int shield = mx * 4;
-                if (*hpn < shield) {
-                    *hpn = shield;
-                    g_parry_shield = 1;
-                    g_hp_prev = shield;
-                }
-            } else if (g_parry_shield) {
-                // Window closed without a hit: hand the true value back (but never cut a
-                // heal that something else performed in the meantime).
-                if (*hpn > g_hp_prev) *hpn = g_hp_prev;
-                g_parry_shield = 0;
-                g_hp_prev = *hpn;
-            }
+            // The 0.1% that still gets through must never be lethal all by itself: with the
+            // window open, never leave the player sitting at 1 HP.
+            if (open2 && *hpn > 0 && *hpn < 2) *hpn = 2;
+            (void)hpm;
         }
     }
     int attack_down = ((buttons & (unsigned short)g_cfg.attack_button_mask) != 0);
@@ -1282,7 +1270,7 @@ static BOOL arm_thread(HANDLE th) {
         // to 1.0f lets the VEH scale them deterministically -- the state-object route for damage
         // reduction is inert (measured) and polling loses the race against the same-frame
         // damage resolution.
-        if (slot < 4 && g_cfg.damage_cut_percent > 0.0f) {
+        if (slot < 4 && (g_cfg.damage_cut_percent > 0.0f || g_cfg.parry_button_mask != 0)) {
             (&ctx.Dr0)[slot] = g_base + PG_RVA_DMGRATE_RESET;
             dr7 |= (DWORD64)1 << (slot * 2);
             slot++;
@@ -3656,10 +3644,25 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep) {
     if (rip == g_base + PG_RVA_DMGRATE_RESET) {
         c->EFlags |= 0x10000;                    // resume flag, or it fires again at once
         unsigned long long mgr = g_player_mgr;
-        if (g_buff_dmgcut.active && mgr && (unsigned long long)c->Rcx == mgr) {
-            float f = 1.0f - (float)g_cfg.damage_cut_percent / 100.0f;
-            if (f < 0.0f) f = 0.0f;
-            if (f < 1.0f) {
+        if (mgr && (unsigned long long)c->Rcx == mgr) {
+            float f = 1.0f;
+            int have = 0;
+            // A fresh parry press protects its whole window. The cut is 99.9%, not exactly
+            // 100%: at 100% the hit leaves no trace, the HP-drop path never notices it and the
+            // parry rewards (Ki, HP, damage cut, 99 gauge, sound) would never fire. A sliver
+            // keeps the hit detectable, and the tick then writes the HP straight back.
+            unsigned long long press = g_parry_in.press_ms;
+            unsigned long long now2 = now_ms();
+            if (g_cfg.parry_button_mask != 0 && press != 0 && now2 >= press &&
+                (now2 - press) <= (unsigned long long)g_cfg.window_ms) {
+                f = 0.001f;
+                have = 1;
+            } else if (g_buff_dmgcut.active) {
+                f = 1.0f - (float)g_cfg.damage_cut_percent / 100.0f;
+                if (f < 0.0f) f = 0.0f;
+                have = 1;
+            }
+            if (have && f < 1.0f) {
                 *(float *)((char *)mgr + 0x24) *= f;
                 *(float *)((char *)mgr + 0x28) *= f;
             }
