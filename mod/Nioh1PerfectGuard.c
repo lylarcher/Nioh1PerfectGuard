@@ -2348,9 +2348,10 @@ static void action_cancel_followup(void) {
 static void perfect_guard_rewards(int from_flag) {
     InterlockedIncrement(&g_perfect);
     if (g_perfect <= 60) {
-        log_line("PERFECT GUARD #%ld via %s (guard pressed %llums ago)",
+        log_line("PERFECT GUARD #%ld via %s (guard pressed %llums ago, sound=%d)",
                  g_perfect, g_cfg.block_event_source ? "guard-flag" : "guard-cost",
-                 now_ms() - g_guard_in.press_ms);
+                 now_ms() - g_guard_in.press_ms,
+                 (g_cfg.sound_enabled && g_sound_event) ? 1 : 0);
     }
     // Never call into XAudio2 from an exception handler on a game thread: just
     // raise a request and let the worker (which owns the COM apartment) play it.
