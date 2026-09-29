@@ -246,7 +246,9 @@ static void config_defaults(Config *c) {
     // of mgr+0x24, scaled in the VEH handler) lands.
     c->damage_cut_percent = 50.0f;   // v0.1.3: direct write of the damage-taken accumulators
     c->damage_cut_ms = 10000;
-    c->armor_buff = 1;               // v0.1.3: no hit stun while active
+    // Unverified: with the bit set the operator still felt interrupted, so this ships off.
+    // The implementation is harmless (a bit write, no engine call) and stays available.
+    c->armor_buff = 0;
 
     c->armor_buff_ms = 5000;
     // The 99 gauge: ON by default, 10% per perfect guard in each phase. This is now a
