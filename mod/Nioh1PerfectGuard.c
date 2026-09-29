@@ -252,12 +252,12 @@ static void config_defaults(Config *c) {
     // Measured: one small spirit stone adds 212 and three fill the bar, so the full
     // value is ~636 -- NOT the Ki maximum at param+0x44, which is what an earlier
     // version clamped to (that is why every write was a no-op).
-    c->lw_gauge_max = 636;
+    c->lw_gauge_max = 515;
     // [param+0x48] turned out to be a value the engine rewrites every frame (LWD2 proved
     // it: wrote 260.6, read back 197), so the mod must not write it. Until the real
     // store is identified this is 0 = disabled; the offset can then be set from the INI
     // without a new build.
-    c->lw_gauge_offset = 0;
+    c->lw_gauge_offset = 0x100;
     c->lw_extend_on = 1;
     c->lw_extend_percent = 10;
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
@@ -2119,7 +2119,7 @@ static void lw_scan(void) {
 // Guard rails, because this writes a game field from an exception handler: the maximum
 // must look like a maximum, the current value must be inside [0, max], and the write only
 // ever *raises* the value, never above the maximum.
-#define PG_LW_GAUGE_OFF 0x48
+#define PG_LW_GAUGE_OFF 0x100   // deficit: 0 = full (see the comment in lw_plan_on_guard)
 #define PG_LW_BURN_OFF 0xCC
 #define PG_LW_BURN_MAX 100.0f
 #define PG_LW_CUR_MAX 100000.0f
@@ -2166,9 +2166,13 @@ static void lw_plan_on_guard(void) {
     if (!(m > 0.0f) || m > PG_LW_CUR_MAX) return;      // NaN-safe
     if (!(c >= 0.0f) || c > m) return;                 // not a gauge-shaped value
 
+    // The store is a DEFICIT: 0 = gauge full, 515 = empty (measured: it jumped to 515
+    // the instant the whole gauge was consumed, then refilled towards 0). And the
+    // engine class that *recovers* the amrita gauge is what decrements this field, so
+    // "add N% to the gauge" means "subtract N% of the maximum from the deficit".
     float add = (float)pct / 100.0f * m;
-    float nv = c + add;
-    if (nv > m) nv = m;
+    float nv = c - add;
+    if (nv < 0.0f) nv = 0.0f;
     if (nv > c) {
         *cur = nv;
         g_lw_wrote_val = nv;
