@@ -1,4 +1,4 @@
-# 仁王 1 · 精准防御（精防）MOD — v0.1.1
+# 仁王 1 · 精准防御（精防）MOD — v0.1.2
 
 在《仁王 1 完全版》（Nioh: Complete Edition，`nioh.exe` 1.24.8）中实现类似仁王 3
 「Guard Parry / 精准防御」的格挡收益。
@@ -135,7 +135,7 @@ LEARN key VK=0xA0 pressed -> GuardKeyVK=160
 | `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **精防后承受伤害降低**（0 = 关）。想启用设成 4 |
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **霸体**（已决定不使用，见下） |
 | `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` / `LivingWeaponGaugeMax` / `LivingWeaponGaugeOffset` | **1** / 10 / **515** / **0x100** | **九十九槽（精华量表 / 守护灵槽）积累**：每次精防加 N% 槽，**默认开**、默认 10% |
-| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **1** / **25** | **九十九状态中续烧条**：在九十九状态下每次精防续 N%，**默认开**、默认 10% |
+| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **1** / **50** | **九十九状态中续烧条**：在九十九状态下每次精防续 N%，**默认开**、默认 10% |
 | `CancelActionOnGuard` | **1** | **单按防御键取消当前动作**（0 = 关）：攻击/武技、喝药、上阴阳符、上咒术忍术、丢道具都算。防御+X/Y/A 这类组合键**不算**；移动不影响 |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | 哪些键算攻击键 / 与防御键相隔多少毫秒内算“组合键” |
 | `CancelActionStrictHold` / `CancelActionFrames` / `CancelActionRecentMs` | 0 / 30 / **0** | 严格模式（按着就不取消）/ 动画帧推进量 / **0 = 任何防御按下都取消**（不区分精防与普通防御）|

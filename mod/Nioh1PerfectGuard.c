@@ -35,7 +35,7 @@
 // tests cannot drift away from what ships.
 #include "pg_logic.h"
 
-#define MOD_VERSION "0.1.1-nioh1"
+#define MOD_VERSION "0.1.2-nioh1"
 #define MAX_TARGETS 4
 #define MAX_ARMED 8192
 #define LOG_CAP (MAX_PATH * 2)
@@ -262,7 +262,7 @@ static void config_defaults(Config *c) {
     // drains at ~15/s in game, so +10 points is ~0.7s -- imperceptible. Parked for
     // v0.1.2 with a sensible magnitude; off by default in v0.1.1 by decision.
     c->lw_extend_on = 1;
-    c->lw_extend_percent = 25;
+    c->lw_extend_percent = 50;   // validated in game: +50 is clearly visible
     // Guard-cancels-attack is ON by default: it was asked for as a default feature,
     // and unlike the timed buffs it needs no engine calls -- it only advances the
     // current action's motion frame, the same kind of write this mod already makes.

@@ -1,4 +1,4 @@
-# Nioh 1 · Perfect Guard — v0.1.1
+# Nioh 1 · Perfect Guard — v0.1.2
 
 Timed-guard rewards for *Nioh: Complete Edition* (`nioh.exe` 1.24.8), in the spirit
 of Nioh 3's Guard Parry.
@@ -116,7 +116,7 @@ apply **within about a second** while the game is running.
 | `DamageCutPercent` / `DamageCutMs` | **0** / 10000 | **Damage-taken reduction after a perfect guard** (0 = off). Set to 4 to enable |
 | `ArmorBuff` / `ArmorBuffMs` | 0 / 5000 | **Armour** (dropped by decision, see below) |
 | `LivingWeaponGaugeOnGuard` / `LivingWeaponGaugePercent` / `LivingWeaponGaugeMax` / `LivingWeaponGaugeOffset` | **1** / 10 / **515** / **0x100** | **99 gauge (amrita / guardian-spirit gauge) accumulation**: +N% per perfect guard; **on by default**, 10% |
-| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **1** / **25** | **Extend the burning gauge while the 99 state is active**: +N% per perfect guard; **on by default**, 10% |
+| `LivingWeaponExtendOnGuard` / `LivingWeaponExtendPercent` | **1** / **50** | **Extend the burning gauge while the 99 state is active**: +N% per perfect guard; **on by default**, 10% |
 | `CancelActionOnGuard` | **1** | **A pure guard press cancels the current action** (0 = off): attacks/skills, drinking and using items, onmyo talismans, ninjutsu, throwing items. Guard+X/Y/A is a combination and does not cancel; movement is irrelevant |
 | `AttackButtonMask` / `ComboGuardWindowMs` | 0xF000 / 100 | Which buttons count as attacks / how close a press counts as a combination |
 | `CancelActionStrictHold` / `CancelActionFrames` / `CancelActionRecentMs` | 0 / 30 / **0** | Strict “held blocks” mode / motion frames advanced / **0 = any guard press cancels** (perfect and normal blocks alike) |
