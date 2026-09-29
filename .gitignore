@@ -64,3 +64,6 @@ _work/*.log
 /_work/*_states.json
 /_work/*_ctors.json
 /_work/*.json
+
+# Python virtualenv for the config GUI
+/.venv/
